@@ -8,6 +8,9 @@ import { BottomDrawer } from './components/BottomDrawer'
 import { Toast } from './components/Toast'
 import { EmptyState } from './components/EmptyState'
 import { SimpleView } from './components/SimpleView'
+import { StatusPanel } from './components/StatusPanel'
+import { CommitBox } from './components/CommitBox'
+import { DiffViewer } from './components/DiffViewer'
 
 const SIMPLE_W = 900
 const SIMPLE_H = 600
@@ -21,6 +24,9 @@ export function App(): JSX.Element {
   const setActiveRepo = useRepo((s) => s.setActiveRepo)
   const setRecents = useRepo((s) => s.setRecents)
   const pushToast = useRepo((s) => s.pushToast)
+  const refreshSignal = useRepo((s) => s.refreshSignal)
+  const selectedFile = useRepo((s) => s.selectedFile)
+  const setSelectedFile = useRepo((s) => s.setSelectedFile)
   useGitStatus()
 
   const [dryRun, setDryRun] = useState<{ active: boolean; logPath: string } | null>(null)
@@ -106,6 +112,8 @@ export function App(): JSX.Element {
   }
 
   // ── Advanced view ──────────────────────────────────────────────────────────
+  const refresh = async (): Promise<void> => { refreshSignal() }
+
   return (
     <div className="h-full w-full flex flex-col bg-bg text-text">
       {dryRunBanner}
@@ -121,9 +129,22 @@ export function App(): JSX.Element {
           <>
             <div className="flex-1 min-h-0 flex">
               <RefsSidebar />
-              <main className="flex-1 min-w-0 flex flex-col bg-bg">
+
+              {/* Center: commit graph with diff overlay */}
+              <div className="flex-1 min-w-0 flex flex-col relative overflow-hidden">
                 <CommitGraph />
-              </main>
+                {selectedFile && (
+                  <div className="absolute inset-0 z-20 bg-bg flex flex-col">
+                    <DiffViewer onClose={() => setSelectedFile(null)} />
+                  </div>
+                )}
+              </div>
+
+              {/* Right: staging panel */}
+              <div className="w-[280px] min-w-[240px] border-l border-line flex flex-col bg-bg">
+                <StatusPanel onRefresh={refresh} />
+                <CommitBox onRefresh={refresh} />
+              </div>
             </div>
             <BottomDrawer />
           </>

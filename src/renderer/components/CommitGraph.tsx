@@ -5,10 +5,12 @@ import { computeLanes, laneColor, type GraphRow } from './graph/computeLanes'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { Avatar } from './Avatar'
 
-const ROW_HEIGHT = 28
-const LANE_WIDTH = 16
-const LEFT_PAD = 12
-const DOT_RADIUS = 4
+const ROW_HEIGHT = 34
+const LANE_WIDTH = 24
+const LEFT_PAD = 14
+const DOT_RADIUS = 11
+const NODE_BORDER = 2.5
+const STROKE_WIDTH = 2
 const REFS_COL_WIDTH = 220
 
 export function CommitGraph(): JSX.Element {
@@ -338,8 +340,7 @@ export function CommitGraph(): JSX.Element {
             <col style={{ width: REFS_COL_WIDTH }} />
             <col style={{ width: graphWidth }} />
             <col style={{ width: '100%' }} />
-            <col style={{ width: 120, minWidth: 80 }} />
-            <col style={{ width: 130, minWidth: 100 }} />
+            <col style={{ width: 260, minWidth: 180 }} />
           </colgroup>
           <tbody>
             <tr
@@ -380,10 +381,8 @@ export function CommitGraph(): JSX.Element {
                 )}
               </td>
               <td className="align-middle px-2 py-0 text-xs text-muted whitespace-nowrap">
-                WIP
-              </td>
-              <td className="align-middle px-2 py-0 text-xs text-muted whitespace-nowrap">
-                now
+                <span className="font-mono opacity-60">WIP</span>
+                <span className="ml-2 opacity-60">now</span>
               </td>
             </tr>
 
@@ -496,7 +495,7 @@ function CommitRow({
         x2={cx(l)}
         y2={bot}
         stroke={laneColor(l)}
-        strokeWidth={1.5}
+        strokeWidth={STROKE_WIDTH}
       />
     )
   }
@@ -519,7 +518,7 @@ function CommitRow({
         x2={cx(l)}
         y2={bot}
         stroke={laneColor(l)}
-        strokeWidth={1.5}
+        strokeWidth={STROKE_WIDTH}
       />
     )
   }
@@ -536,20 +535,21 @@ function CommitRow({
           x2={cx(lane)}
           y2={bot}
           stroke={laneColor(lane)}
-          strokeWidth={1.5}
+          strokeWidth={STROKE_WIDTH}
         />
       )
     } else {
       const x1 = cx(lane)
       const x2 = cx(pl)
-      const d = `M ${x1} ${mid} C ${x1} ${mid + 8}, ${x2} ${bot - 8}, ${x2} ${bot}`
+      const curve = Math.min(ROW_HEIGHT * 0.3, Math.abs(x2 - x1) * 0.5)
+      const d = `M ${x1} ${mid} C ${x1} ${mid + curve}, ${x2} ${bot - curve}, ${x2} ${bot}`
       lines.push(
         <path
           key={`p-${pi}`}
           d={d}
           fill="none"
           stroke={laneColor(pl)}
-          strokeWidth={1.5}
+          strokeWidth={STROKE_WIDTH}
         />
       )
     }
@@ -558,19 +558,22 @@ function CommitRow({
   for (const ml of row.mergeFrom) {
     const x1 = cx(ml)
     const x2 = cx(lane)
-    const d = `M ${x1} ${top} C ${x1} ${top + 8}, ${x2} ${mid - 8}, ${x2} ${mid}`
+    const curve = Math.min(ROW_HEIGHT * 0.3, Math.abs(x2 - x1) * 0.5)
+    const d = `M ${x1} ${top} C ${x1} ${top + curve}, ${x2} ${mid - curve}, ${x2} ${mid}`
     lines.push(
       <path
         key={`m-${ml}`}
         d={d}
         fill="none"
         stroke={laneColor(ml)}
-        strokeWidth={1.5}
+        strokeWidth={STROKE_WIDTH}
       />
     )
   }
 
   const color = laneColor(lane)
+  const innerR = DOT_RADIUS - NODE_BORDER
+  const avatarSize = Math.round(innerR * 2)
 
   return (
     <tr
@@ -603,14 +606,35 @@ function CommitRow({
       >
         <svg width={width} height={ROW_HEIGHT} className="block">
           {lines}
+          {/* Colored ring — drawn first so avatar sits on top */}
           <circle
             cx={cx(lane)}
             cy={mid}
             r={DOT_RADIUS}
-            fill={color}
-            stroke="#0f1115"
-            strokeWidth={1.5}
+            fill="var(--color-bg, #0f1115)"
+            stroke={color}
+            strokeWidth={NODE_BORDER}
           />
+          {/* Avatar clipped to inner circle */}
+          <foreignObject
+            x={cx(lane) - innerR}
+            y={mid - innerR}
+            width={avatarSize}
+            height={avatarSize}
+          >
+            <div style={{
+              borderRadius: '50%',
+              overflow: 'hidden',
+              width: avatarSize,
+              height: avatarSize,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              lineHeight: 0,
+            }}>
+              <Avatar email={commit.email} author={commit.author} size={avatarSize} />
+            </div>
+          </foreignObject>
         </svg>
       </td>
 
@@ -619,18 +643,13 @@ function CommitRow({
         <span className="block truncate">{commit.subject}</span>
       </td>
 
-      {/* Author column */}
-      <td className="align-middle px-2 py-0 text-xs text-muted whitespace-nowrap overflow-hidden">
-        <div className="flex items-center gap-1.5 overflow-hidden">
-          <Avatar email={commit.email} author={commit.author} size={14} />
+      {/* Author + date column */}
+      <td className="align-middle px-2 py-0 text-xs text-muted whitespace-nowrap overflow-hidden" colSpan={2}>
+        <div className="flex items-center gap-2 overflow-hidden">
           <span className="truncate">{commit.author}</span>
+          <span className="shrink-0 font-mono opacity-60">{commit.shortHash}</span>
+          <span className="shrink-0 opacity-60">{commit.relativeDate}</span>
         </div>
-      </td>
-
-      {/* Hash + date column */}
-      <td className="align-middle px-2 py-0 text-xs text-muted whitespace-nowrap">
-        <span className="font-mono">{commit.shortHash}</span>
-        <span className="ml-2">{commit.relativeDate}</span>
       </td>
     </tr>
   )
@@ -712,26 +731,28 @@ function WipMarker({
   const cx = LEFT_PAD + headLane * LANE_WIDTH + LANE_WIDTH / 2
   const mid = ROW_HEIGHT / 2
   const connectorColor = laneColor(headLane)
+  const wipColor = dirty ? '#f5a623' : '#3ecf8e'
   return (
     <svg width={width} height={ROW_HEIGHT} className="block">
-      {/* connector down to first commit row */}
       <line
         x1={cx}
         y1={mid + DOT_RADIUS}
         x2={cx}
         y2={ROW_HEIGHT}
         stroke={connectorColor}
-        strokeWidth={1.5}
-        strokeDasharray="3 2"
+        strokeWidth={STROKE_WIDTH}
+        strokeDasharray="4 3"
       />
       <circle
         cx={cx}
         cy={mid}
         r={DOT_RADIUS}
-        fill={dirty ? '#f5a623' : '#3ecf8e'}
-        stroke="#0f1115"
-        strokeWidth={1.5}
+        fill="var(--color-bg, #0f1115)"
+        stroke={wipColor}
+        strokeWidth={NODE_BORDER}
       />
+      {/* pencil-dot indicator */}
+      <circle cx={cx} cy={mid} r={3} fill={wipColor} />
     </svg>
   )
 }

@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { html as diff2htmlHtml } from 'diff2html'
 import { useRepo } from '../store/useRepo'
-import { StatusPanel } from './StatusPanel'
-import { DiffViewer } from './DiffViewer'
-import { CommitBox } from './CommitBox'
 import { CommitDetail } from './CommitDetail'
 
 const MIN_HEIGHT = 160
@@ -14,7 +11,8 @@ export function BottomDrawer(): JSX.Element {
   const stashView = useRepo((s) => s.stashView)
   const drawerHeight = useRepo((s) => s.drawerHeight)
   const setDrawerHeight = useRepo((s) => s.setDrawerHeight)
-  const refreshSignal = useRepo((s) => s.refreshSignal)
+
+  const isVisible = selectedCommit !== null || stashView !== null
 
   const dragRef = useRef<{ startY: number; startHeight: number } | null>(null)
 
@@ -48,9 +46,7 @@ export function BottomDrawer(): JSX.Element {
     document.body.style.userSelect = 'none'
   }
 
-  const refresh = async (): Promise<void> => {
-    refreshSignal()
-  }
+  if (!isVisible) return <></>
 
   return (
     <div
@@ -65,10 +61,8 @@ export function BottomDrawer(): JSX.Element {
       <div className="flex-1 min-h-0 flex flex-col">
         {selectedCommit !== null ? (
           <CommitDetail />
-        ) : stashView !== null ? (
-          <StashDiffPanel />
         ) : (
-          <WipPanel onRefresh={refresh} />
+          <StashDiffPanel />
         )}
       </div>
     </div>
@@ -152,22 +146,3 @@ function StashDiffPanel(): JSX.Element {
   )
 }
 
-interface WipPanelProps {
-  onRefresh: () => Promise<void>
-}
-
-function WipPanel({ onRefresh }: WipPanelProps): JSX.Element {
-  return (
-    <div className="flex-1 min-h-0 flex">
-      <div className="w-[300px] min-w-[260px] border-r border-line flex flex-col">
-        <StatusPanel onRefresh={onRefresh} />
-      </div>
-      <div className="flex-1 min-w-0 border-r border-line flex flex-col">
-        <DiffViewer />
-      </div>
-      <div className="w-[300px] min-w-[260px] flex flex-col">
-        <CommitBox onRefresh={onRefresh} />
-      </div>
-    </div>
-  )
-}

@@ -1,8 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Ref, Stash, StashFileEntry } from '@shared/types'
 import { useRepo } from '../store/useRepo'
 import { IconChevronDown, IconChevronRight, IconStash } from './Icons'
 import { ContextMenu, type MenuItem } from './ContextMenu'
+
+const MIN_WIDTH = 180
+const MAX_WIDTH = 480
+const DEFAULT_WIDTH = 240
 
 export function RefsSidebar(): JSX.Element {
   const activeRepo = useRepo((s) => s.activeRepo)
@@ -17,12 +21,46 @@ export function RefsSidebar(): JSX.Element {
   const pushToast = useRepo((s) => s.pushToast)
   const refreshSignal = useRepo((s) => s.refreshSignal)
 
+  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_WIDTH)
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null)
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent): void => {
+      if (!dragRef.current) return
+      const dx = e.clientX - dragRef.current.startX
+      setSidebarWidth(
+        Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, dragRef.current.startWidth + dx))
+      )
+    }
+    const onUp = (): void => {
+      dragRef.current = null
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [])
+
+  const startDrag = (e: React.MouseEvent): void => {
+    dragRef.current = { startX: e.clientX, startWidth: sidebarWidth }
+    document.body.style.cursor = 'ew-resize'
+    document.body.style.userSelect = 'none'
+  }
+
   const [localOpen, setLocalOpen] = useState(true)
   const [remoteOpen, setRemoteOpen] = useState(false)
   const [stashOpen, setStashOpen] = useState(true)
   const [tagsOpen, setTagsOpen] = useState(false)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [tagDeleteConfirm, setTagDeleteConfirm] = useState<string | null>(null)
+  const [checkoutConfirm, setCheckoutConfirm] = useState<{
+    label: string
+    action: () => Promise<void>
+  } | null>(null)
 
   const wipCount = useMemo(() => {
     if (!status) return 0
@@ -52,15 +90,32 @@ export function RefsSidebar(): JSX.Element {
     }
   }
 
-  const checkoutLocal = (name: string): Promise<void> =>
+  const doCheckoutLocal = (name: string): Promise<void> =>
     runWithBusy(`Checkout ${name}`, () =>
       window.git.branch.checkout(activeRepo.path, name)
     )
 
-  const checkoutRemote = (name: string): Promise<void> =>
+  const doCheckoutRemote = (name: string): Promise<void> =>
     runWithBusy(`Checkout ${name}`, () =>
       window.git.branch.checkoutRemote(activeRepo.path, name)
     )
+
+  const checkoutLocal = (ref: { name: string; current: boolean }): void => {
+    if (ref.current) return
+    if (wipCount > 0) {
+      setCheckoutConfirm({ label: ref.name, action: () => doCheckoutLocal(ref.name) })
+    } else {
+      void doCheckoutLocal(ref.name)
+    }
+  }
+
+  const checkoutRemote = (name: string): void => {
+    if (wipCount > 0) {
+      setCheckoutConfirm({ label: name, action: () => doCheckoutRemote(name) })
+    } else {
+      void doCheckoutRemote(name)
+    }
+  }
 
   const onLocalContext = (e: React.MouseEvent, ref: Ref): void => {
     e.preventDefault()
@@ -70,7 +125,7 @@ export function RefsSidebar(): JSX.Element {
       items: [
         {
           label: 'Checkout',
-          onClick: () => checkoutLocal(ref.name),
+          onClick: () => checkoutLocal(ref),
           disabled: !!ref.current
         },
         {
@@ -173,7 +228,11 @@ export function RefsSidebar(): JSX.Element {
   }, [refs.remote])
 
   return (
-    <aside className="w-[260px] min-w-[220px] bg-bg-subtle border-r border-line flex flex-col">
+    <aside
+      className="bg-bg-subtle border-r border-line flex flex-row shrink-0"
+      style={{ width: sidebarWidth }}
+    >
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
       <div className="flex-1 overflow-y-auto">
         <div
           onClick={() => setSelectedCommit(null)}
@@ -208,11 +267,11 @@ export function RefsSidebar(): JSX.Element {
               <BranchRow
                 key={r.fullName}
                 refData={r}
-                onClick={() => checkoutLocal(r.name)}
-                onDoubleClick={() => checkoutLocal(r.name)}
+                onClick={() => checkoutLocal(r)}
+                onDoubleClick={() => checkoutLocal(r)}
                 onContextMenu={(e) => onLocalContext(e, r)}
                 hoverActionLabel={!r.current ? 'Checkout' : undefined}
-                onHoverAction={!r.current ? () => checkoutLocal(r.name) : undefined}
+                onHoverAction={!r.current ? () => checkoutLocal(r) : undefined}
               />
             ))
           )}
@@ -229,9 +288,6 @@ export function RefsSidebar(): JSX.Element {
           ) : (
             remoteGroups.map(([remoteName, remoteRefs]) => (
               <div key={remoteName}>
-                <div className="px-3 py-1 text-xs uppercase tracking-wide text-muted">
-                  {remoteName}
-                </div>
                 {remoteRefs.map((r) => (
                   <BranchRow
                     key={r.fullName}
@@ -334,6 +390,47 @@ export function RefsSidebar(): JSX.Element {
           onClose={() => setMenu(null)}
         />
       )}
+
+      {checkoutConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-bg-panel border border-line rounded-lg shadow-xl p-5 w-[340px] flex flex-col gap-4">
+            <div className="flex flex-col gap-1">
+              <span className="text-sm font-semibold">Checkout with uncommitted changes?</span>
+              <span className="text-xs text-muted">
+                You have {wipCount} uncommitted change{wipCount === 1 ? '' : 's'}.
+                Switching to <span className="font-mono text-text">{checkoutConfirm.label}</span> may
+                overwrite or discard them.
+              </span>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setCheckoutConfirm(null)}
+                className="px-3 py-1.5 rounded text-sm border border-line hover:bg-bg-subtle"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const action = checkoutConfirm.action
+                  setCheckoutConfirm(null)
+                  void action()
+                }}
+                className="px-3 py-1.5 rounded text-sm bg-accent text-white hover:bg-accent-hover"
+              >
+                Checkout anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      </div>{/* end inner flex-col */}
+
+      {/* Drag handle */}
+      <div
+        onMouseDown={startDrag}
+        className="w-1 cursor-ew-resize hover:bg-accent/40 active:bg-accent/60 shrink-0"
+        title="Drag to resize"
+      />
     </aside>
   )
 }

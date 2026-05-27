@@ -1,8 +1,12 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useCallback } from 'react'
 import { html as diff2htmlHtml } from 'diff2html'
 import { useRepo } from '../store/useRepo'
 
-export function DiffViewer(): JSX.Element {
+interface DiffViewerProps {
+  onClose?: () => void
+}
+
+export function DiffViewer({ onClose }: DiffViewerProps = {}): JSX.Element {
   const activeRepo = useRepo((s) => s.activeRepo)
   const selectedFile = useRepo((s) => s.selectedFile)
   const diff = useRepo((s) => s.diff)
@@ -37,6 +41,19 @@ export function DiffViewer(): JSX.Element {
     }
   }, [activeRepo, selectedFile, status, setDiff, setDiffLoading, pushToast])
 
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && onClose) onClose()
+    },
+    [onClose]
+  )
+
+  useEffect(() => {
+    if (!onClose) return
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose, handleKeyDown])
+
   const rendered = useMemo(() => {
     if (!diff) return ''
     return diff2htmlHtml(diff, {
@@ -56,11 +73,20 @@ export function DiffViewer(): JSX.Element {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="h-7 px-3 flex items-center bg-bg-subtle border-b border-line text-xs">
-        <span className="font-mono truncate">{selectedFile.path}</span>
-        <span className="ml-2 text-muted">
-          {selectedFile.staged ? '(staged)' : '(working tree)'}
+      <div className="h-8 px-3 flex items-center bg-bg-subtle border-b border-line text-xs gap-2">
+        <span className="font-mono truncate flex-1">{selectedFile.path}</span>
+        <span className="text-muted shrink-0">
+          {selectedFile.staged ? 'staged' : 'working tree'}
         </span>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="shrink-0 ml-1 text-muted hover:text-text text-base leading-none"
+            title="Close diff (Escape)"
+          >
+            ✕
+          </button>
+        )}
       </div>
       <div className="flex-1 min-h-0 overflow-auto diff-target">
         {diffLoading ? (
