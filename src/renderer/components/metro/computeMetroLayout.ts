@@ -17,6 +17,12 @@ function classifyLaneSide(name: string | undefined): 'above' | 'below' | 'auto' 
   return 'auto'
 }
 
+interface LaneRemap {
+  remap: Map<number, number>
+  /** Lane index (in the post-remap space) where the chosen "main" sits. */
+  mainLane: number
+}
+
 /**
  * Builds a permutation of lane indices that places "main" on the middle lane
  * and arranges the rest above/below it, sorted by recency so the busiest
@@ -27,7 +33,7 @@ function buildLaneRemap(
   oldLaneBranchName: Map<number, string>,
   oldLaneFirstRow: Map<number, number>,
   currentBranch: string | null
-): Map<number, number> {
+): LaneRemap {
   // Find the "main" lane. Prefer real 'main' / 'master' refs; fall back to the
   // current branch's lane; otherwise lane 0.
   const candidates = ['main', 'master', ...(currentBranch ? [currentBranch] : [])]
@@ -78,7 +84,7 @@ function buildLaneRemap(
   for (let i = 0; i < below.length; i++) {
     remap.set(below[i], mainNewLane + 1 + i)
   }
-  return remap
+  return { remap, mainLane: mainNewLane }
 }
 
 export type StationKind = 'commit' | 'interchange' | 'tag' | 'head'
@@ -153,6 +159,10 @@ export interface MetroLayout {
    * to a station. Consumers like the sidebar use this to look up the lane
    * (and therefore color) of a branch tip. */
   tipLane: Map<string, number>
+  /** Lane index of the trunk ("main") in the post-remap space. */
+  mainLane: number
+  /** y coordinate of the trunk lane — used for initial scroll centering. */
+  mainLaneY: number
 }
 
 export interface MetroLayoutOpts {
@@ -247,7 +257,7 @@ export function computeMetroLayout(
   }
   if (oldLaneCount === 0) oldLaneCount = 1
 
-  const remap = buildLaneRemap(
+  const { remap, mainLane } = buildLaneRemap(
     oldLaneCount,
     oldLaneBranchName,
     oldLaneFirstRow,
@@ -420,6 +430,8 @@ export function computeMetroLayout(
     height,
     cols,
     headLaneY,
-    tipLane
+    tipLane,
+    mainLane,
+    mainLaneY: ly(mainLane)
   }
 }

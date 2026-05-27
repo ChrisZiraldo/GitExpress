@@ -53,12 +53,14 @@ export function MetroMap(): JSX.Element {
     [graph, refs, status?.branch.current]
   )
 
-  // Scroll the view so HEAD (right edge) is visible after the layout is ready.
+  // Initial scroll: horizontally to the right (HEAD / newest commits) and
+  // vertically so main is centered in the viewport.
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    el.scrollTo({ left: layout.width * zoom, behavior: 'auto' })
-  }, [layout.width, zoom])
+    const targetTop = Math.max(0, layout.mainLaneY * zoom - el.clientHeight / 2)
+    el.scrollTo({ left: layout.width * zoom, top: targetTop, behavior: 'auto' })
+  }, [layout.width, layout.mainLaneY, zoom])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -192,7 +194,8 @@ export function MetroMap(): JSX.Element {
       Math.max(ZOOM_MIN, (el.clientWidth - 16) / layout.width)
     )
     setZoom(targetZoom)
-    el.scrollTo({ left: 0, behavior: 'smooth' })
+    const targetTop = Math.max(0, layout.mainLaneY * targetZoom - el.clientHeight / 2)
+    el.scrollTo({ left: 0, top: targetTop, behavior: 'smooth' })
   }
   const zoomIn = (): void => setZoom((z) => Math.min(ZOOM_MAX, +(z + 0.1).toFixed(2)))
   const zoomOut = (): void => setZoom((z) => Math.max(ZOOM_MIN, +(z - 0.1).toFixed(2)))
