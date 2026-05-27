@@ -102,6 +102,10 @@ export function RefsSidebar(): JSX.Element {
 
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
   const [tagDeleteConfirm, setTagDeleteConfirm] = useState<string | null>(null)
+  // Stores the branch + force flag of the branch currently armed for delete.
+  const [branchDeleteConfirm, setBranchDeleteConfirm] = useState<
+    { name: string; force: boolean } | null
+  >(null)
   const [checkoutConfirm, setCheckoutConfirm] = useState<{
     label: string
     action: () => Promise<void>
@@ -184,8 +188,34 @@ export function RefsSidebar(): JSX.Element {
     }
   }
 
+  const handleDeleteBranch = async (
+    name: string,
+    force: boolean
+  ): Promise<void> => {
+    const armed = branchDeleteConfirm
+    if (!armed || armed.name !== name || armed.force !== force) {
+      setBranchDeleteConfirm({ name, force })
+      setTimeout(
+        () =>
+          setBranchDeleteConfirm((c) =>
+            c && c.name === name && c.force === force ? null : c
+          ),
+        3000
+      )
+      return
+    }
+    setBranchDeleteConfirm(null)
+    await runWithBusy(
+      `${force ? 'Force-delete' : 'Delete'} branch ${name}`,
+      () => window.git.branch.delete(activeRepo.path, name, { force })
+    )
+  }
+
   const onBranchLineContext = (e: React.MouseEvent, ref: Ref): void => {
     e.preventDefault()
+    const armed = branchDeleteConfirm
+    const deleteArmed = armed?.name === ref.name && armed.force === false
+    const forceArmed = armed?.name === ref.name && armed.force === true
     setMenu({
       x: e.clientX,
       y: e.clientY,
@@ -200,6 +230,19 @@ export function RefsSidebar(): JSX.Element {
             navigator.clipboard?.writeText(ref.name)
             pushToast('success', 'Name copied')
           }
+        },
+        { type: 'separator' },
+        {
+          label: deleteArmed ? 'Confirm delete?' : 'Delete branch',
+          danger: true,
+          disabled: !!ref.current,
+          onClick: () => handleDeleteBranch(ref.name, false)
+        },
+        {
+          label: forceArmed ? 'Confirm force-delete?' : 'Force delete branch',
+          danger: true,
+          disabled: !!ref.current,
+          onClick: () => handleDeleteBranch(ref.name, true)
         }
       ]
     })

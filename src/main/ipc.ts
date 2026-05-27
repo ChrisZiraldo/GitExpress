@@ -23,6 +23,7 @@ import {
   checkoutRemote,
   createBranch,
   createBranchFromCommit,
+  deleteBranch,
   listBranches,
   resetToRemote
 } from './git/branch'
@@ -218,6 +219,15 @@ export function registerIpc(): void {
     async (_e, cwd: string, remoteRef: string) => {
       if (!cwd) return fail('No repository selected')
       return checkoutRemote(cwd, remoteRef)
+    }
+  )
+
+  ipcMain.handle(
+    Channels.BranchDelete,
+    async (_e, cwd: string, name: string, opts: { force?: boolean }) => {
+      if (!cwd) return fail('No repository selected')
+      if (!name) return fail('No branch name provided')
+      return deleteBranch(cwd, name, opts ?? {})
     }
   )
 

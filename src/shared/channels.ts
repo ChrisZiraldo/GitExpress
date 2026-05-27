@@ -17,6 +17,7 @@ export const Channels = {
   BranchCheckoutDetached: 'branch:checkoutDetached',
   BranchCreateFromCommit: 'branch:createFromCommit',
   BranchCheckoutRemote: 'branch:checkoutRemote',
+  BranchDelete: 'branch:delete',
   RefsList: 'refs:list',
   LogRecent: 'log:recent',
   LogGraph: 'log:graph',

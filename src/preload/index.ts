@@ -84,7 +84,13 @@ const api = {
     checkoutRemote: (cwd: string, remoteRef: string): Promise<Result<true>> =>
       ipcRenderer.invoke(Channels.BranchCheckoutRemote, cwd, remoteRef),
     resetToRemote: (cwd: string): Promise<Result<true>> =>
-      ipcRenderer.invoke(Channels.BranchResetToRemote, cwd)
+      ipcRenderer.invoke(Channels.BranchResetToRemote, cwd),
+    delete: (
+      cwd: string,
+      name: string,
+      opts: { force?: boolean } = {}
+    ): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.BranchDelete, cwd, name, opts)
   },
   refs: {
     list: (cwd: string): Promise<Result<RefSet>> =>
