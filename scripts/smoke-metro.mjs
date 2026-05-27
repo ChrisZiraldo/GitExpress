@@ -29,7 +29,7 @@ const git = (cmd) =>
 
 function setup() {
   git('init -q -b main')
-  git('config user.email "smoke@gitexpress.dev"')
+  git('config user.email "smoke@gitmetro.dev"')
   git('config user.name "Smoke"')
   git('config commit.gpgsign false')
   execSync('echo a > a.txt', { cwd: REPO })
@@ -38,17 +38,36 @@ function setup() {
   execSync('echo b > b.txt', { cwd: REPO })
   git('add .')
   git('commit -qm "add b"')
+
+  // Feature branch (should land ABOVE main after remap)
   git('checkout -qb feature/auth')
   execSync('echo auth > auth.txt', { cwd: REPO })
   git('add .')
   git('commit -qm "auth: login"')
   git('checkout -q main')
+
+  // Another feature branch — merged back into main
   git('checkout -qb feature/dash')
   execSync('echo dash > dash.txt', { cwd: REPO })
   git('add .')
   git('commit -qm "dash: card"')
   git('checkout -q main')
   git('merge --no-ff -q feature/dash -m "merge feature/dash"')
+
+  // Hotfix branch (should land BELOW main after remap)
+  git('checkout -qb hotfix/payment')
+  execSync('echo hot > hot.txt', { cwd: REPO })
+  git('add .')
+  git('commit -qm "hotfix: payment"')
+  git('checkout -q main')
+
+  // Chore branch (should land BELOW main after remap)
+  git('checkout -qb chore/deps')
+  execSync('echo deps > deps.txt', { cwd: REPO })
+  git('add .')
+  git('commit -qm "chore: bump deps"')
+  git('checkout -q main')
+
   git('tag v0.1')
 }
 
@@ -174,6 +193,18 @@ async function main() {
     console.log(`  headStation:${layout.headStation ? layout.headStation.shortHash : 'null'}`)
     console.log(`  tagStations:${layout.tagStations.length}`)
 
+    // Lane positioning checks: main is in the middle, features above, hotfix/chore below.
+    const lanesByName = new Map()
+    for (const t of layout.terminals) lanesByName.set(t.name, t.lane)
+    console.log(`  lane assignments:`)
+    for (const [name, lane] of [...lanesByName.entries()].sort((a, b) => a[1] - b[1])) {
+      console.log(`    lane ${lane}: ${name}`)
+    }
+    const mainLane = lanesByName.get('main')
+    const authLane = lanesByName.get('feature/auth')
+    const hotfixLane = lanesByName.get('hotfix/payment')
+    const choreLane = lanesByName.get('chore/deps')
+
     const errors = []
     if (layout.stations.length !== graph.length)
       errors.push(`station count mismatch (got ${layout.stations.length}, want ${graph.length})`)
@@ -190,6 +221,14 @@ async function main() {
       errors.push('expected at least one terminal badge')
     if (!layout.headStation) errors.push('expected a headStation')
     if (layout.tagStations.length === 0) errors.push('expected at least one tag station')
+
+    if (mainLane === undefined) errors.push('expected main lane to be present')
+    if (authLane !== undefined && mainLane !== undefined && authLane >= mainLane)
+      errors.push(`feature/auth lane ${authLane} should be ABOVE main lane ${mainLane}`)
+    if (hotfixLane !== undefined && mainLane !== undefined && hotfixLane <= mainLane)
+      errors.push(`hotfix/payment lane ${hotfixLane} should be BELOW main lane ${mainLane}`)
+    if (choreLane !== undefined && mainLane !== undefined && choreLane <= mainLane)
+      errors.push(`chore/deps lane ${choreLane} should be BELOW main lane ${mainLane}`)
 
     if (errors.length) {
       console.error('\n✗ Smoke test failed:')

@@ -23,6 +23,7 @@ import type { Ref, Stash, StashFileEntry } from '@shared/types'
 import { useRepo } from '../store/useRepo'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { laneColor } from './metro/colors'
+import { computeMetroLayout } from './metro/computeMetroLayout'
 
 const MIN_WIDTH = 220
 const MAX_WIDTH = 480
@@ -116,42 +117,18 @@ export function RefsSidebar(): JSX.Element {
     )
   }, [status])
 
-  // Compute branch lines with derived status. Lane indices come from the
-  // actual metro layout so each branch's color matches its line on the map.
+  // Compute branch lines with derived status. We share the metro map's
+  // layout so each branch's color matches its line on the map exactly,
+  // including the main-in-the-middle remapping.
   const branchLines: BranchLineStatus[] = useMemo(() => {
     if (!graph.length) return []
-    // Walk the graph from newest to oldest and figure out which lane each
-    // local branch tip occupies (uses the same algorithm as computeLanes).
-    const tipLane = new Map<string, number>() // commit hash → lane
-    const pending: (string | null)[] = []
-    for (const commit of graph) {
-      let home = pending.findIndex((h) => h === commit.hash)
-      if (home === -1) {
-        home = pending.findIndex((h) => h === null)
-        if (home === -1) {
-          home = pending.length
-          pending.push(null)
-        }
-      }
-      for (let i = 0; i < pending.length; i++) {
-        if (i !== home && pending[i] === commit.hash) pending[i] = null
-      }
-      tipLane.set(commit.hash, home)
-      pending[home] = commit.parents[0] ?? null
-      for (let pi = 1; pi < commit.parents.length; pi++) {
-        let slot = pending.findIndex((h) => h === null)
-        if (slot === -1) { slot = pending.length; pending.push(null) }
-        pending[slot] = commit.parents[pi]
-      }
-      while (pending.length > 0 && pending[pending.length - 1] === null) pending.pop()
-    }
-
+    const layout = computeMetroLayout(graph, refs, status?.branch?.current ?? null)
     const tipToRow = new Map<string, number>()
     graph.forEach((c, i) => {
       if (!tipToRow.has(c.hash)) tipToRow.set(c.hash, i)
     })
     return refs.local.map((r, idx) => {
-      const laneIndex = tipLane.get(r.hash) ?? idx
+      const laneIndex = layout.tipLane.get(r.hash) ?? idx
       const color = laneColor(laneIndex)
       const commitCount =
         graph.length > 0
@@ -163,7 +140,7 @@ export function RefsSidebar(): JSX.Element {
       else st = 'stale'
       return { ref: r, laneIndex, color, commitCount, status: st }
     })
-  }, [refs.local, graph])
+  }, [refs, graph, status?.branch?.current])
 
   if (!activeRepo) return <></>
 
