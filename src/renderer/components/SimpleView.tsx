@@ -383,7 +383,8 @@ export function SimpleView(): JSX.Element {
         <TitleBar onSwitchAdvanced={switchToAdvanced} />
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center max-w-sm">
-            <h1 className="text-xl font-semibold mb-2">Welcome to SimpleGit</h1>
+            <h1 className="text-xl font-semibold mb-1">Git Express</h1>
+            <p className="text-xs text-accent font-medium mb-3">Next Stop Main</p>
             <p className="text-sm text-muted mb-5">
               Pick a repository to get started.
             </p>
@@ -815,7 +816,7 @@ function ViewToggle({ onSwitch }: ViewToggleProps): JSX.Element {
         onClick={onSwitch}
         className="px-2.5 py-1 bg-bg-panel hover:bg-line text-muted hover:text-text"
       >
-        Advanced
+        Metro
       </button>
     </div>
   )

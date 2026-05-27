@@ -1,5 +1,5 @@
-appId: com.simplegit.app
-productName: SimpleGit
+appId: com.gitexpress.app
+productName: Git Express
 directories:
   buildResources: build
   output: release/${version}

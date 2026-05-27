@@ -8,11 +8,26 @@ interface Schema {
 }
 
 const store = new Store<Schema>({
-  name: 'simplegit-config',
+  name: 'git-express-config',
   defaults: {
     recents: [],
     windowBounds: { width: 1280, height: 820 },
     lastRepoPath: ''
+  },
+  migrations: {
+    '0.1.0': (s) => {
+      try {
+        const legacy = new Store<Schema>({ name: 'simplegit-config' })
+        const legacyRecents = legacy.get('recents')
+        if (legacyRecents?.length && !s.get('recents')?.length) {
+          s.set('recents', legacyRecents)
+          s.set('windowBounds', legacy.get('windowBounds'))
+          s.set('lastRepoPath', legacy.get('lastRepoPath') ?? '')
+        }
+      } catch {
+        // ignore — legacy store may not exist
+      }
+    }
   }
 })
 

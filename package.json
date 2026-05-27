@@ -1,9 +1,9 @@
 {
-  "name": "simplegit",
+  "name": "git-express",
   "version": "0.1.0",
-  "description": "A simple Electron-based Git GUI that wraps the local git CLI.",
+  "description": "Git Express — Next Stop Main. A polished Electron-based Git client that visualizes history as a subway map.",
   "main": "out/main/index.js",
-  "author": "SimpleGit",
+  "author": "Git Express",
   "license": "MIT",
   "private": true,
   "scripts": {
@@ -19,6 +19,7 @@
   "dependencies": {
     "diff2html": "^3.4.48",
     "electron-store": "^8.2.0",
+    "lucide-react": "^0.469.0",
     "zustand": "^4.5.5"
   },
   "devDependencies": {

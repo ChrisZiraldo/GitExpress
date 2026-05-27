@@ -23,6 +23,13 @@ export interface ToastEntry {
 
 const EMPTY_REFS: RefSet = { local: [], remote: [], tags: [] }
 
+export type MetroViewTab = 'history' | 'flow' | 'risk' | 'ownership'
+
+export interface MetroFilters {
+  showMerged: boolean
+  showStale: boolean
+}
+
 interface RepoState {
   activeRepo: RecentRepo | null
   recents: RecentRepo[]
@@ -44,6 +51,11 @@ interface RepoState {
   viewMode: 'simple' | 'advanced'
   refreshVersion: number
   toasts: ToastEntry[]
+  // Metro UI state
+  metroViewTab: MetroViewTab
+  searchQuery: string
+  highlightedBranchId: string | null
+  metroFilters: MetroFilters
   setActiveRepo: (repo: RecentRepo | null) => void
   setRecents: (recents: RecentRepo[]) => void
   setStatus: (status: StatusResult | null) => void
@@ -62,6 +74,10 @@ interface RepoState {
   setBusy: (busy: boolean) => void
   setDrawerHeight: (h: number) => void
   setViewMode: (mode: 'simple' | 'advanced') => void
+  setMetroViewTab: (tab: MetroViewTab) => void
+  setSearchQuery: (q: string) => void
+  setHighlightedBranchId: (id: string | null) => void
+  setMetroFilters: (patch: Partial<MetroFilters>) => void
   refreshSignal: () => void
   pushToast: (kind: ToastEntry['kind'], text: string) => void
   dismissToast: (id: number) => void
@@ -71,26 +87,40 @@ let toastSeq = 0
 
 const DEFAULT_DRAWER_HEIGHT = 320
 
-function loadViewMode(): 'simple' | 'advanced' {
+/**
+ * Reads `gitexpress.<key>` first, falling back to the legacy `simplegit.<key>`
+ * key for in-place migration from the SimpleGit era.
+ */
+function readPref(key: string): string | null {
   try {
-    const v = localStorage.getItem('simplegit.viewMode')
-    if (v === 'advanced') return 'advanced'
-    return 'simple'
+    return (
+      localStorage.getItem(`gitexpress.${key}`) ??
+      localStorage.getItem(`simplegit.${key}`)
+    )
   } catch {
-    return 'simple'
+    return null
   }
 }
 
-function loadDrawerHeight(): number {
+function writePref(key: string, value: string): void {
   try {
-    const raw = localStorage.getItem('simplegit.drawerHeight')
-    if (!raw) return DEFAULT_DRAWER_HEIGHT
-    const n = parseInt(raw, 10)
-    if (!Number.isFinite(n) || n < 120) return DEFAULT_DRAWER_HEIGHT
-    return n
+    localStorage.setItem(`gitexpress.${key}`, value)
   } catch {
-    return DEFAULT_DRAWER_HEIGHT
+    /* ignore */
   }
+}
+
+function loadViewMode(): 'simple' | 'advanced' {
+  const v = readPref('viewMode')
+  return v === 'advanced' ? 'advanced' : 'simple'
+}
+
+function loadDrawerHeight(): number {
+  const raw = readPref('drawerHeight')
+  if (!raw) return DEFAULT_DRAWER_HEIGHT
+  const n = parseInt(raw, 10)
+  if (!Number.isFinite(n) || n < 120) return DEFAULT_DRAWER_HEIGHT
+  return n
 }
 
 export const useRepo = create<RepoState>((set) => ({
@@ -114,6 +144,10 @@ export const useRepo = create<RepoState>((set) => ({
   viewMode: loadViewMode(),
   refreshVersion: 0,
   toasts: [],
+  metroViewTab: 'history',
+  searchQuery: '',
+  highlightedBranchId: null,
+  metroFilters: { showMerged: true, showStale: false },
   setActiveRepo: (repo) =>
     set({
       activeRepo: repo,
@@ -155,21 +189,18 @@ export const useRepo = create<RepoState>((set) => ({
   setDiffLoading: (diffLoading) => set({ diffLoading }),
   setBusy: (busy) => set({ busy }),
   setDrawerHeight: (h) => {
-    try {
-      localStorage.setItem('simplegit.drawerHeight', String(h))
-    } catch {
-      /* ignore */
-    }
+    writePref('drawerHeight', String(h))
     set({ drawerHeight: h })
   },
   setViewMode: (mode) => {
-    try {
-      localStorage.setItem('simplegit.viewMode', mode)
-    } catch {
-      /* ignore */
-    }
+    writePref('viewMode', mode)
     set({ viewMode: mode })
   },
+  setMetroViewTab: (tab) => set({ metroViewTab: tab }),
+  setSearchQuery: (q) => set({ searchQuery: q }),
+  setHighlightedBranchId: (id) => set({ highlightedBranchId: id }),
+  setMetroFilters: (patch) =>
+    set((state) => ({ metroFilters: { ...state.metroFilters, ...patch } })),
   refreshSignal: () =>
     set((state) => ({ refreshVersion: state.refreshVersion + 1 })),
   pushToast: (kind, text) =>
