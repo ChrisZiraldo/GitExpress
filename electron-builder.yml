@@ -1,0 +1,24 @@
+appId: com.simplegit.app
+productName: SimpleGit
+directories:
+  buildResources: build
+  output: release/${version}
+files:
+  - out/**/*
+  - package.json
+  - "!**/*.map"
+asar: true
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.developer-tools
+  hardenedRuntime: false
+win:
+  target:
+    - nsis
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Development
