@@ -88,12 +88,13 @@ let toastSeq = 0
 const DEFAULT_DRAWER_HEIGHT = 320
 
 /**
- * Reads `gitexpress.<key>` first, falling back to the legacy `simplegit.<key>`
- * key for in-place migration from the SimpleGit era.
+ * Reads `gitmetro.<key>` first, falling back to legacy `gitexpress.<key>` and
+ * `simplegit.<key>` keys for in-place migration from older brandings.
  */
 function readPref(key: string): string | null {
   try {
     return (
+      localStorage.getItem(`gitmetro.${key}`) ??
       localStorage.getItem(`gitexpress.${key}`) ??
       localStorage.getItem(`simplegit.${key}`)
     )
@@ -104,7 +105,7 @@ function readPref(key: string): string | null {
 
 function writePref(key: string, value: string): void {
   try {
-    localStorage.setItem(`gitexpress.${key}`, value)
+    localStorage.setItem(`gitmetro.${key}`, value)
   } catch {
     /* ignore */
   }

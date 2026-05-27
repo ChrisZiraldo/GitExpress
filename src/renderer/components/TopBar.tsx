@@ -9,7 +9,8 @@ import {
   GitBranch,
   Archive,
   Settings,
-  Layers
+  Layers,
+  Maximize2
 } from 'lucide-react'
 import { useRepo, type MetroViewTab } from '../store/useRepo'
 
@@ -52,6 +53,7 @@ export function TopBar({ onSwitchSimple }: TopBarProps): JSX.Element {
   const [includeUntracked, setIncludeUntracked] = useState(() => {
     try {
       return (
+        localStorage.getItem('gitmetro.stashUntracked') === '1' ||
         localStorage.getItem('gitexpress.stashUntracked') === '1' ||
         localStorage.getItem('simplegit.stashUntracked') === '1'
       )
@@ -62,7 +64,7 @@ export function TopBar({ onSwitchSimple }: TopBarProps): JSX.Element {
 
   useEffect(() => {
     try {
-      localStorage.setItem('gitexpress.stashUntracked', includeUntracked ? '1' : '0')
+      localStorage.setItem('gitmetro.stashUntracked', includeUntracked ? '1' : '0')
     } catch {
       /* ignore */
     }
@@ -158,15 +160,12 @@ export function TopBar({ onSwitchSimple }: TopBarProps): JSX.Element {
 
   return (
     <div className="titlebar-drag h-12 bg-bg-subtle border-b border-line flex items-center px-3 gap-2 shrink-0">
-      {/* Wordmark + tagline */}
+      {/* Wordmark */}
       <div className="flex items-center gap-2 pl-2 mr-1 pr-3 border-r border-line shrink-0">
         <div className="w-7 h-7 rounded-md bg-accent/15 border border-accent/40 flex items-center justify-center text-accent">
           <TramFront size={16} strokeWidth={2.25} />
         </div>
-        <div className="flex flex-col leading-tight">
-          <span className="font-semibold text-sm text-text">Git Express</span>
-          <span className="text-[10px] text-muted">Next Stop Main</span>
-        </div>
+        <span className="font-semibold text-base text-text">Git Metro</span>
       </div>
 
       {/* Repo picker */}
@@ -362,6 +361,13 @@ export function TopBar({ onSwitchSimple }: TopBarProps): JSX.Element {
         <span className="px-2 py-1 rounded-md bg-accent text-white text-xs font-medium border border-accent">
           Metro
         </span>
+        <ToolIconButton
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent('gitmetro:fit'))
+          }}
+          title="Fit map"
+          icon={<Maximize2 size={14} />}
+        />
         <ToolIconButton
           onClick={() => undefined}
           title="Settings"

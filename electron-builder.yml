@@ -1,5 +1,5 @@
-appId: com.gitexpress.app
-productName: Git Express
+appId: com.gitmetro.app
+productName: Git Metro
 directories:
   buildResources: build
   output: release/${version}

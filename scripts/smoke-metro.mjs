@@ -170,6 +170,9 @@ async function main() {
     const oldest = layout.stations.find((s) => s.row === layout.cols - 1)
     console.log(`  newest x:   ${newest ? newest.x.toFixed(1) : '?'} (should be largest)`)
     console.log(`  oldest x:   ${oldest ? oldest.x.toFixed(1) : '?'} (should be smallest)`)
+    console.log(`  terminals:  ${layout.terminals.length}`)
+    console.log(`  headStation:${layout.headStation ? layout.headStation.shortHash : 'null'}`)
+    console.log(`  tagStations:${layout.tagStations.length}`)
 
     const errors = []
     if (layout.stations.length !== graph.length)
@@ -183,6 +186,10 @@ async function main() {
       errors.push(
         `horizontal direction wrong: newest x=${newest.x} should be > oldest x=${oldest.x}`
       )
+    if (layout.terminals.length === 0)
+      errors.push('expected at least one terminal badge')
+    if (!layout.headStation) errors.push('expected a headStation')
+    if (layout.tagStations.length === 0) errors.push('expected at least one tag station')
 
     if (errors.length) {
       console.error('\n✗ Smoke test failed:')

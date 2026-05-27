@@ -79,14 +79,14 @@ export function computeLanes(commits: GraphCommit[]): GraphLayout {
 }
 
 export const LANE_PALETTE = [
-  '#5b8cff',
-  '#3ecf8e',
-  '#f5a623',
-  '#ff5d6c',
-  '#a672ff',
-  '#56cfe1',
-  '#ff8fab',
-  '#ffe066'
+  '#3b82f6',
+  '#a855f7',
+  '#22c55e',
+  '#14b8a6',
+  '#f97316',
+  '#eab308',
+  '#ec4899',
+  '#64748b'
 ]
 
 export function laneColor(lane: number): string {

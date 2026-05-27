@@ -116,22 +116,51 @@ export function RefsSidebar(): JSX.Element {
     )
   }, [status])
 
-  // Compute branch lines with derived status
+  // Compute branch lines with derived status. Lane indices come from the
+  // actual metro layout so each branch's color matches its line on the map.
   const branchLines: BranchLineStatus[] = useMemo(() => {
     if (!graph.length) return []
-    // Estimate lane index per local branch by finding the row of the branch tip
+    // Walk the graph from newest to oldest and figure out which lane each
+    // local branch tip occupies (uses the same algorithm as computeLanes).
+    const tipLane = new Map<string, number>() // commit hash → lane
+    const pending: (string | null)[] = []
+    for (const commit of graph) {
+      let home = pending.findIndex((h) => h === commit.hash)
+      if (home === -1) {
+        home = pending.findIndex((h) => h === null)
+        if (home === -1) {
+          home = pending.length
+          pending.push(null)
+        }
+      }
+      for (let i = 0; i < pending.length; i++) {
+        if (i !== home && pending[i] === commit.hash) pending[i] = null
+      }
+      tipLane.set(commit.hash, home)
+      pending[home] = commit.parents[0] ?? null
+      for (let pi = 1; pi < commit.parents.length; pi++) {
+        let slot = pending.findIndex((h) => h === null)
+        if (slot === -1) { slot = pending.length; pending.push(null) }
+        pending[slot] = commit.parents[pi]
+      }
+      while (pending.length > 0 && pending[pending.length - 1] === null) pending.pop()
+    }
+
     const tipToRow = new Map<string, number>()
     graph.forEach((c, i) => {
       if (!tipToRow.has(c.hash)) tipToRow.set(c.hash, i)
     })
     return refs.local.map((r, idx) => {
-      const laneIndex = idx // lane fallback: ordinal — used only for color hint
+      const laneIndex = tipLane.get(r.hash) ?? idx
       const color = laneColor(laneIndex)
-      // Naive commit count for now: commits where the branch's tip is found ahead-of-main
-      const commitCount = graph.length > 0 ? Math.max(1, Math.min(20, graph.length - (tipToRow.get(r.hash) ?? 0))) : 0
+      const commitCount =
+        graph.length > 0
+          ? Math.max(1, Math.min(20, graph.length - (tipToRow.get(r.hash) ?? 0)))
+          : 0
       let st: BranchLineStatus['status'] = 'neutral'
       if (r.current) st = 'passing'
       else if (r.upstream) st = 'open-pr'
+      else st = 'stale'
       return { ref: r, laneIndex, color, commitCount, status: st }
     })
   }, [refs.local, graph])
@@ -395,13 +424,13 @@ export function RefsSidebar(): JSX.Element {
           >
             <div className="grid grid-cols-2 gap-x-2 gap-y-1 px-3 py-2 text-[11px] text-muted">
               <LegendItem icon={<Circle size={11} className="text-accent" />} label="Commit" />
-              <LegendItem icon={<GitMerge size={11} className="text-accent" />} label="Interchange" />
-              <LegendItem icon={<Flag size={11} className="text-warn" />} label="Tag / Release" />
-              <LegendItem icon={<TramFront size={11} className="text-accent" />} label="Open PR" />
+              <LegendItem icon={<TramFront size={11} className="text-accent" />} label="Train (PR)" />
+              <LegendItem icon={<GitMerge size={11} className="text-accent" />} label="Merge / Interchange" />
               <LegendItem icon={<CheckCircle2 size={11} className="text-success" />} label="CI Passing" />
+              <LegendItem icon={<Flag size={11} className="text-success" />} label="Release / Tag" />
               <LegendItem icon={<XCircle size={11} className="text-danger" />} label="CI Failing" />
-              <LegendItem icon={<TriangleAlert size={11} className="text-warn" />} label="Conflict" />
-              <LegendItem icon={<EyeOff size={11} className="text-muted" />} label="Stale" />
+              <LegendItem icon={<TriangleAlert size={11} className="text-warn" />} label="Conflicts" />
+              <LegendItem icon={<EyeOff size={11} className="text-muted" />} label="Stale Branch" />
             </div>
           </Section>
 

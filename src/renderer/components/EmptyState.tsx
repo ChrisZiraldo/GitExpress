@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { Folder, TramFront } from 'lucide-react'
 import { useRepo } from '../store/useRepo'
 import { computeMetroLayout } from './metro/computeMetroLayout'
+import { laneColor } from './metro/colors'
 import { MOCK_GRAPH, MOCK_REFS } from '../data/gitMetroMock'
 
 export function EmptyState(): JSX.Element {
@@ -44,13 +45,12 @@ export function EmptyState(): JSX.Element {
             <span>All aboard</span>
           </div>
           <h1 className="text-3xl font-bold leading-tight text-text">
-            Git Express
+            Git Metro
           </h1>
-          <p className="text-sm text-accent font-medium mt-1">Next Stop Main</p>
+          <p className="text-sm text-accent font-medium mt-1">Read your repo like a subway map</p>
           <p className="text-sm text-muted mt-3">
-            Read history the way you read a subway map. Branches are lines, commits are
-            stations, and merges are interchanges — all powered by your local{' '}
-            <code className="font-mono">git</code> CLI.
+            Branches are lines, commits are stations, and merges are interchanges —
+            all powered by your local <code className="font-mono">git</code> CLI.
           </p>
           <div className="flex flex-col gap-2 mt-6">
             <button
@@ -94,7 +94,7 @@ export function EmptyState(): JSX.Element {
                     x2={Math.max(x1, x2)}
                     y1={y}
                     y2={y}
-                    stroke={laneStroke(l)}
+                    stroke={laneColor(l)}
                     strokeWidth={3}
                     strokeLinecap="round"
                   />
@@ -119,7 +119,7 @@ export function EmptyState(): JSX.Element {
                     key={`mockc-${row.commit.hash}-${pi}`}
                     d={`M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`}
                     fill="none"
-                    stroke={laneStroke(pl)}
+                    stroke={laneColor(pl)}
                     strokeWidth={3}
                     strokeLinecap="round"
                   />
@@ -144,7 +144,7 @@ export function EmptyState(): JSX.Element {
                   y={s.y - 12}
                   textAnchor="middle"
                   fontSize={9}
-                  fill="#5b8cff"
+                  fill={s.color}
                   className="font-mono"
                 >
                   HEAD
@@ -155,9 +155,4 @@ export function EmptyState(): JSX.Element {
       </div>
     </div>
   )
-}
-
-const PAL = ['#5b8cff', '#a672ff', '#3ecf8e', '#56cfe1', '#ff8a5b', '#ffd166', '#ff8fab', '#5a6275']
-function laneStroke(l: number): string {
-  return PAL[((l % PAL.length) + PAL.length) % PAL.length]
 }

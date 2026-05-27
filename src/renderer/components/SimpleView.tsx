@@ -383,8 +383,8 @@ export function SimpleView(): JSX.Element {
         <TitleBar onSwitchAdvanced={switchToAdvanced} />
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center max-w-sm">
-            <h1 className="text-xl font-semibold mb-1">Git Express</h1>
-            <p className="text-xs text-accent font-medium mb-3">Next Stop Main</p>
+            <h1 className="text-xl font-semibold mb-1">Git Metro</h1>
+            <p className="text-xs text-accent font-medium mb-3">Read your repo like a subway map</p>
             <p className="text-sm text-muted mb-5">
               Pick a repository to get started.
             </p>

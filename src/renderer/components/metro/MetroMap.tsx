@@ -1,4 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Compass,
+  Plus,
+  Minus,
+  Maximize2,
+  Lock,
+  Tag,
+  CheckCircle2
+} from 'lucide-react'
 import type { Ref } from '@shared/types'
 import { useRepo } from '../../store/useRepo'
 import { computeMetroLayout, type MetroStation, type MetroLayout } from './computeMetroLayout'
@@ -8,7 +17,9 @@ import { TrainMarker } from './TrainMarker'
 import { MiniMap } from './MiniMap'
 import { ContextMenu, type MenuItem } from '../ContextMenu'
 
-const LABEL_WIDTH = 156 // sticky left rail showing branch line names
+const RAIL_WIDTH = 0 // We render terminal badges in-SVG instead of using a sticky rail.
+const ZOOM_MIN = 0.55
+const ZOOM_MAX = 1.6
 
 interface Tooltip {
   station: MetroStation
@@ -33,6 +44,7 @@ export function MetroMap(): JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [scrollLeft, setScrollLeft] = useState(0)
   const [viewportW, setViewportW] = useState(800)
+  const [zoom, setZoom] = useState(1)
   const [tooltip, setTooltip] = useState<Tooltip | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
 
@@ -41,12 +53,12 @@ export function MetroMap(): JSX.Element {
     [graph, refs, status?.branch.current]
   )
 
-  // Once the layout is ready, scroll so the newest commit (right edge) is visible.
+  // Scroll the view so HEAD (right edge) is visible after the layout is ready.
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    el.scrollTo({ left: layout.width, behavior: 'auto' })
-  }, [layout.width])
+    el.scrollTo({ left: layout.width * zoom, behavior: 'auto' })
+  }, [layout.width, zoom])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -61,6 +73,14 @@ export function MetroMap(): JSX.Element {
       window.removeEventListener('resize', onResize)
     }
   }, [])
+
+  // Listen for global "fit" events from the TopBar.
+  useEffect(() => {
+    const onFit = (): void => doFit()
+    window.addEventListener('gitmetro:fit', onFit)
+    return () => window.removeEventListener('gitmetro:fit', onFit)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layout.width, viewportW])
 
   const q = searchQuery.trim().toLowerCase()
 
@@ -157,9 +177,25 @@ export function MetroMap(): JSX.Element {
   const jumpToFraction = (fraction: number): void => {
     const el = scrollRef.current
     if (!el) return
-    const target = Math.max(0, Math.min(layout.width - el.clientWidth, layout.width * fraction))
+    const target = Math.max(
+      0,
+      Math.min(layout.width * zoom - el.clientWidth, layout.width * zoom * fraction)
+    )
     el.scrollTo({ left: target, behavior: 'smooth' })
   }
+
+  const doFit = (): void => {
+    const el = scrollRef.current
+    if (!el || layout.width === 0) return
+    const targetZoom = Math.min(
+      ZOOM_MAX,
+      Math.max(ZOOM_MIN, (el.clientWidth - 16) / layout.width)
+    )
+    setZoom(targetZoom)
+    el.scrollTo({ left: 0, behavior: 'smooth' })
+  }
+  const zoomIn = (): void => setZoom((z) => Math.min(ZOOM_MAX, +(z + 0.1).toFixed(2)))
+  const zoomOut = (): void => setZoom((z) => Math.max(ZOOM_MIN, +(z - 0.1).toFixed(2)))
 
   if (!activeRepo || graph.length === 0) {
     return (
@@ -169,31 +205,34 @@ export function MetroMap(): JSX.Element {
     )
   }
 
+  const oldestStation = layout.stations[layout.stations.length - 1]
+
   return (
     <div className="flex-1 min-h-0 relative bg-bg overflow-hidden">
-      {/* Sticky left rail: branch line labels (one per lane) */}
-      <BranchRail layout={layout} highlight={isLaneHighlighted} />
-
       {/* Scrollable map body */}
       <div
         ref={scrollRef}
         className="absolute inset-0 overflow-auto"
-        style={{ paddingLeft: LABEL_WIDTH }}
+        style={{ paddingLeft: RAIL_WIDTH }}
       >
         <div
           style={{
-            width: layout.width,
-            height: Math.max(layout.height, 240),
+            width: layout.width * zoom,
+            height: Math.max(layout.height * zoom, 320),
             position: 'relative'
           }}
         >
           <svg
             width={layout.width}
             height={layout.height}
+            viewBox={`0 0 ${layout.width} ${layout.height}`}
+            preserveAspectRatio="xMinYMin meet"
             className="block"
             style={{
+              width: layout.width * zoom,
+              height: layout.height * zoom,
               background:
-                'radial-gradient(ellipse at right, rgba(91,140,255,0.06), transparent 65%)'
+                'radial-gradient(ellipse 60% 60% at 80% 50%, rgba(59,130,246,0.07), transparent 70%)'
             }}
           >
             <LaneTracks layout={layout} highlight={isLaneHighlighted} />
@@ -201,7 +240,32 @@ export function MetroMap(): JSX.Element {
             <Lines layout={layout} highlight={isLaneHighlighted} />
             <Curves layout={layout} highlight={isLaneHighlighted} />
             <Trains layout={layout} refs={refs} />
-            <StationLabels layout={layout} q={q} highlight={isLaneHighlighted} selectedHash={selectedCommit} />
+
+            <TerminalBadges layout={layout} highlight={isLaneHighlighted} />
+
+            {/* Per-station inline labels — small text next to every station */}
+            <StationLabels
+              layout={layout}
+              q={q}
+              highlight={isLaneHighlighted}
+              selectedHash={selectedCommit}
+            />
+
+            <TagBadges layout={layout} highlight={isLaneHighlighted} />
+
+            {oldestStation && (
+              <text
+                x={oldestStation.x}
+                y={oldestStation.y + layout.laneHeight * 0.55 + 14}
+                textAnchor="middle"
+                fontSize={10}
+                fill="#8a93a6"
+                className="font-mono"
+              >
+                Start · {oldestStation.relativeDate}
+              </text>
+            )}
+
             {layout.stations.map((station) => {
               const dim = !isLaneHighlighted(station.lane) || (q && !stationMatches(station, q))
               return (
@@ -217,13 +281,28 @@ export function MetroMap(): JSX.Element {
                 />
               )
             })}
+
+            <HeadBadge layout={layout} status={status?.branch ?? null} />
+            <AheadBadge layout={layout} status={status?.branch ?? null} />
           </svg>
         </div>
       </div>
 
+      {/* Compass + Legend overlay at top-left */}
+      <CompassOverlay />
+
+      {/* Zoom controls bottom-left */}
+      <ZoomControls
+        zoom={zoom}
+        onFit={doFit}
+        onIn={zoomIn}
+        onOut={zoomOut}
+      />
+
+      {/* Mini-map bottom-right */}
       <MiniMap
         layout={layout}
-        viewport={{ left: scrollLeft, width: viewportW - LABEL_WIDTH }}
+        viewport={{ left: scrollLeft / zoom, width: (viewportW - RAIL_WIDTH) / zoom }}
         onJump={jumpToFraction}
       />
 
@@ -272,10 +351,6 @@ interface LaneTracksProps {
   highlight: (lane: number) => boolean
 }
 
-/**
- * Faint horizontal "tracks" running the full width for each lane — gives the
- * eye a continuous rail even where no segment is live (mostly aesthetic).
- */
 function LaneTracks({ layout, highlight }: LaneTracksProps): JSX.Element {
   const els: JSX.Element[] = []
   for (let l = 0; l < layout.laneCount; l++) {
@@ -284,24 +359,21 @@ function LaneTracks({ layout, highlight }: LaneTracksProps): JSX.Element {
     els.push(
       <line
         key={`track-${l}`}
-        x1={layout.leftPad - 8}
-        x2={layout.width - layout.rightPad / 2}
+        x1={0}
+        x2={layout.width}
         y1={y}
         y2={y}
         stroke={laneColor(l)}
         strokeWidth={1}
-        opacity={dim ? 0.04 : 0.08}
+        opacity={dim ? 0.03 : 0.06}
       />
     )
   }
   return <g pointerEvents="none">{els}</g>
 }
 
-interface GridProps {
-  layout: MetroLayout
-}
+interface GridProps { layout: MetroLayout }
 
-/** Subtle vertical grid lines between commit columns. */
 function ColumnGrid({ layout }: GridProps): JSX.Element {
   const els: JSX.Element[] = []
   for (let i = 0; i <= layout.cols; i++) {
@@ -311,9 +383,9 @@ function ColumnGrid({ layout }: GridProps): JSX.Element {
         key={`grid-${i}`}
         x1={x}
         x2={x}
-        y1={layout.topPad - 10}
-        y2={layout.topPad + layout.laneCount * layout.laneHeight}
-        stroke="#11151d"
+        y1={layout.topPad - 14}
+        y2={layout.topPad + layout.laneCount * layout.laneHeight + 4}
+        stroke="#0e131c"
         strokeWidth={1}
       />
     )
@@ -326,10 +398,10 @@ interface LinesProps {
   highlight: (lane: number) => boolean
 }
 
-/** Horizontal lane lines between adjacent commit columns. */
+/** Horizontal lane lines between adjacent commit columns. Stale lanes render dashed. */
 function Lines({ layout, highlight }: LinesProps): JSX.Element {
   const { rows, colWidth } = layout
-  const STROKE = 3
+  const STROKE = 3.5
   const els: JSX.Element[] = []
   const xAt = (rowIdx: number): number =>
     layout.leftPad + (layout.cols - 1 - rowIdx) * colWidth + colWidth / 2
@@ -340,13 +412,13 @@ function Lines({ layout, highlight }: LinesProps): JSX.Element {
     const row = rows[i]
     const x1 = xAt(i)
     const isLast = i === rows.length - 1
-    const x2 = isLast ? x1 - colWidth * 0.5 : xAt(i + 1)
+    const x2 = isLast ? x1 - colWidth * 0.65 : xAt(i + 1)
 
-    // liveLanes after this commit — drawn going LEFT toward older rows.
     for (let l = 0; l < row.liveLanes.length; l++) {
       if (row.liveLanes[l] === null) continue
       const y = yAt(l)
       const dim = !highlight(l)
+      const stale = layout.staleLanes.has(l)
       els.push(
         <line
           key={`seg-${i}-${l}`}
@@ -357,35 +429,32 @@ function Lines({ layout, highlight }: LinesProps): JSX.Element {
           stroke={laneColor(l)}
           strokeWidth={STROKE}
           strokeLinecap="round"
-          opacity={dim ? 0.15 : 0.95}
+          opacity={dim ? 0.15 : stale ? 0.55 : 0.95}
+          strokeDasharray={stale ? '6 5' : undefined}
         />
       )
     }
   }
 
-  // Also draw a small stub extending to the RIGHT of the newest commit so HEAD
-  // doesn't look like a dead-end — the line "continues into the future".
+  // Future stub past HEAD — dashed.
   if (rows.length > 0) {
     const newest = rows[0]
     const y = yAt(newest.lane)
-    const xRight = xAt(0) + colWidth * 0.65
-    const dim = !highlight(newest.lane)
     els.push(
       <line
         key="stub-future"
         x1={xAt(0)}
-        x2={xRight}
+        x2={xAt(0) + colWidth * 1.4}
         y1={y}
         y2={y}
         stroke={laneColor(newest.lane)}
         strokeWidth={STROKE}
         strokeLinecap="round"
-        opacity={dim ? 0.15 : 0.95}
-        strokeDasharray="2 3"
+        opacity={0.55}
+        strokeDasharray="3 6"
       />
     )
   }
-
   return <g>{els}</g>
 }
 
@@ -394,13 +463,10 @@ interface CurvesProps {
   highlight: (lane: number) => boolean
 }
 
-/**
- * Bezier curves for lane changes — branch-offs and merges. In horizontal
- * layout these are smooth left-going S-curves.
- */
+/** Bezier S-curves for branch-offs and merges. */
 function Curves({ layout, highlight }: CurvesProps): JSX.Element {
   const { rows, colWidth } = layout
-  const STROKE = 3
+  const STROKE = 3.5
   const els: JSX.Element[] = []
   const xAt = (rowIdx: number): number =>
     layout.leftPad + (layout.cols - 1 - rowIdx) * colWidth + colWidth / 2
@@ -413,7 +479,7 @@ function Curves({ layout, highlight }: CurvesProps): JSX.Element {
     const x1 = xAt(i)
     const y1 = yAt(lane)
 
-    // For parents on a different lane: curve from this station LEFT to the parent's row + lane.
+    // Branch-off: this commit's parent lives on a different lane (further left).
     for (let pi = 0; pi < parentLanes.length; pi++) {
       const pl = parentLanes[pi]
       if (pl < 0 || pl === lane) continue
@@ -425,6 +491,7 @@ function Curves({ layout, highlight }: CurvesProps): JSX.Element {
       const midX = (x1 + x2) / 2
       const d = `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`
       const dim = !highlight(pl) && !highlight(lane)
+      const stale = layout.staleLanes.has(pl) || layout.staleLanes.has(lane)
       els.push(
         <path
           key={`curve-p-${commit.hash}-${pi}`}
@@ -433,15 +500,14 @@ function Curves({ layout, highlight }: CurvesProps): JSX.Element {
           stroke={laneColor(pl)}
           strokeWidth={STROKE}
           strokeLinecap="round"
-          opacity={dim ? 0.15 : 0.95}
+          opacity={dim ? 0.15 : stale ? 0.55 : 0.95}
+          strokeDasharray={stale ? '6 5' : undefined}
         />
       )
     }
 
-    // mergeFrom: a different lane terminates INTO this commit from the next-older column.
+    // Merge-in: another lane terminates INTO this commit from one column over.
     for (const ml of mergeFrom) {
-      // The merged-in lane "came from" one row further from this commit on the time axis.
-      // In horizontal layout that's one column to the LEFT.
       const sourceRow = i + 1 < rows.length ? i + 1 : i
       const x2 = xAt(sourceRow)
       const y2 = yAt(ml)
@@ -469,14 +535,12 @@ interface TrainsProps {
   refs: { local: Ref[]; remote: Ref[] }
 }
 
-/** Animated trains pulsing at the tip of each local branch with an upstream. */
 function Trains({ layout, refs }: TrainsProps): JSX.Element {
   const els: JSX.Element[] = []
-  const tipHashes = new Set(refs.local.filter((r) => r.upstream).map((r) => r.hash))
+  const tipHashes = new Set(refs.local.filter((r) => r.upstream && !r.current).map((r) => r.hash))
   for (const station of layout.stations) {
     if (!tipHashes.has(station.hash)) continue
-    // Place the train just AHEAD of the station along the time axis (to the right).
-    const tx = station.x + layout.colWidth * 0.55
+    const tx = station.x + layout.colWidth * 0.5
     const ty = station.y
     els.push(
       <TrainMarker
@@ -499,38 +563,32 @@ interface StationLabelsProps {
 }
 
 /**
- * Small labels above each notable station: HEAD, tags, branch tips, the
- * currently-selected station, and stations matched by the active search query.
+ * Inline subject labels above (or below) every station — matches the mockup
+ * where every commit shows its subject right next to its node. Lanes in the
+ * top half get labels above; bottom half get labels below — so they radiate
+ * away from the centerline and don't collide with neighboring lanes.
  */
 function StationLabels({ layout, q, highlight, selectedHash }: StationLabelsProps): JSX.Element {
   const els: JSX.Element[] = []
-  const seenTipPerLane = new Set<number>()
+  const midLane = (layout.laneCount - 1) / 2
+  const headHash = layout.headStation?.hash ?? null
+
   for (const s of layout.stations) {
-    const isTip = !seenTipPerLane.has(s.lane)
-    if (isTip) seenTipPerLane.add(s.lane)
+    // Skip the HEAD station — it gets its own big badge.
+    if (s.hash === headHash) continue
+    // Skip tagged stations — they get a green tag badge.
+    if (s.hasTag) continue
 
+    const dim = !highlight(s.lane) || (q && !stationMatches(s, q))
     const isSelected = selectedHash === s.hash
-    const qMatch = q ? stationMatches(s, q) : false
-    const showLabel = s.isHead || s.hasTag || isTip || isSelected || qMatch
-    if (!showLabel) continue
-
-    const dim = !highlight(s.lane)
-    const tagRef = s.refs.find((r) => r.fullName.startsWith('refs/tags/'))
-    const text = s.isHead
-      ? `HEAD · ${truncate(s.subject, 26)}`
-      : tagRef
-        ? `${tagRef.name}`
-        : isTip && s.refs.find((r) => r.fullName.startsWith('refs/heads/'))
-          ? truncate(s.subject, 24)
-          : truncate(s.subject, 20)
-
-    const above = s.lane % 2 === 0
-    const labelY = above ? s.y - 14 : s.y + 24
+    const above = s.lane <= midLane
+    const labelY = above ? s.y - 16 : s.y + 22
+    const text = truncate(s.subject, 22)
 
     els.push(
       <g
         key={`lbl-${s.hash}`}
-        opacity={dim ? 0.3 : 1}
+        opacity={dim ? 0.25 : 1}
         pointerEvents="none"
       >
         <text
@@ -538,7 +596,7 @@ function StationLabels({ layout, q, highlight, selectedHash }: StationLabelsProp
           y={labelY}
           textAnchor="middle"
           fontSize={10}
-          fill={isSelected ? '#e6e8ee' : '#8a93a6'}
+          fill={isSelected ? '#e6e8ee' : '#9aa3b8'}
           className="font-mono"
         >
           {text}
@@ -554,55 +612,364 @@ function truncate(s: string, n: number): string {
   return s.slice(0, n - 1) + '…'
 }
 
-interface BranchRailProps {
+interface TerminalBadgesProps {
   layout: MetroLayout
   highlight: (lane: number) => boolean
 }
 
 /**
- * Sticky left rail showing branch-line names. Functions like a transit-map key:
- * even when the user scrolls horizontally, the labels remain pinned.
+ * Branch-name badge anchored to the LEFT end of each lane. Looks like a
+ * subway-line "terminal" sign — a colored pill with white text and a small
+ * vertical stub connecting it to the line.
  */
-function BranchRail({ layout, highlight }: BranchRailProps): JSX.Element {
+function TerminalBadges({ layout, highlight }: TerminalBadgesProps): JSX.Element {
+  const els: JSX.Element[] = []
+  const CHAR_W = 6.2
+  const PAD_X = 8
+  const HEIGHT = 22
+  for (const t of layout.terminals) {
+    const dim = !highlight(t.lane)
+    const label = t.stale ? `${t.name} (stale)` : t.name
+    const width = Math.max(64, label.length * CHAR_W + PAD_X * 2)
+    const bx = Math.max(6, t.x - width / 2)
+    const by = t.y - HEIGHT / 2
+    els.push(
+      <g key={`term-${t.lane}`} opacity={dim ? 0.35 : 1}>
+        {/* connector stub */}
+        <line
+          x1={bx + width}
+          y1={t.y}
+          x2={t.x + layout.colWidth * 0.5}
+          y2={t.y}
+          stroke={t.color}
+          strokeWidth={3.5}
+          strokeLinecap="round"
+          strokeDasharray={t.stale ? '6 5' : undefined}
+          opacity={t.stale ? 0.55 : 0.95}
+        />
+        {/* pill */}
+        <rect
+          x={bx}
+          y={by}
+          width={width}
+          height={HEIGHT}
+          rx={HEIGHT / 2}
+          fill={t.color}
+          opacity={0.95}
+        />
+        {/* subtle inner ring */}
+        <rect
+          x={bx + 0.5}
+          y={by + 0.5}
+          width={width - 1}
+          height={HEIGHT - 1}
+          rx={HEIGHT / 2}
+          fill="none"
+          stroke="#0b0e14"
+          strokeOpacity={0.25}
+          strokeWidth={1}
+        />
+        <text
+          x={bx + width / 2}
+          y={t.y + 3.5}
+          textAnchor="middle"
+          fontSize={11}
+          fill="#ffffff"
+          fontWeight={600}
+          className="font-mono"
+        >
+          {label}
+        </text>
+      </g>
+    )
+  }
+  return <g pointerEvents="none">{els}</g>
+}
+
+interface TagBadgesProps {
+  layout: MetroLayout
+  highlight: (lane: number) => boolean
+}
+
+/**
+ * Green rounded badges for tagged commits (e.g. "v1.3.0 (next)"). Drawn just
+ * below the line near the station with a small connector dot.
+ */
+function TagBadges({ layout, highlight }: TagBadgesProps): JSX.Element {
+  const els: JSX.Element[] = []
+  for (const s of layout.tagStations) {
+    if (s.isHead) continue // HEAD badge already shows tags via its label
+    const tag = s.refs.find((r) => r.fullName.startsWith('refs/tags/'))
+    if (!tag) continue
+    const dim = !highlight(s.lane)
+    const label = tag.name
+    const width = Math.max(50, label.length * 6.8 + 18)
+    const HEIGHT = 20
+    const above = s.lane <= (layout.laneCount - 1) / 2
+    const by = above ? s.y - HEIGHT - 14 : s.y + 14
+    const bx = s.x - width / 2
+    els.push(
+      <g key={`tag-${s.hash}`} opacity={dim ? 0.35 : 1}>
+        <line
+          x1={s.x}
+          y1={s.y}
+          x2={s.x}
+          y2={above ? by + HEIGHT : by}
+          stroke="#22c55e"
+          strokeWidth={1.5}
+          opacity={0.7}
+        />
+        <rect
+          x={bx}
+          y={by}
+          width={width}
+          height={HEIGHT}
+          rx={4}
+          fill="#102d1f"
+          stroke="#22c55e"
+          strokeWidth={1.5}
+        />
+        <text
+          x={bx + 7}
+          y={by + HEIGHT / 2 + 4}
+          fontSize={10}
+          fill="#22c55e"
+          className="font-mono"
+        >
+          ◢
+        </text>
+        <text
+          x={bx + 18}
+          y={by + HEIGHT / 2 + 4}
+          fontSize={11}
+          fontWeight={600}
+          fill="#22c55e"
+          className="font-mono"
+        >
+          {label}
+        </text>
+      </g>
+    )
+  }
+  return <g pointerEvents="none">{els}</g>
+}
+
+interface HeadBadgeProps {
+  layout: MetroLayout
+  status: { current: string | null; ahead: number; behind: number } | null
+}
+
+/**
+ * The big HEAD badge anchored at the HEAD station. Rounded rectangle showing
+ * the branch name + HEAD + commit's relative date — matches the mockup's
+ * "main HEAD / May 20" plaque.
+ */
+function HeadBadge({ layout, status }: HeadBadgeProps): JSX.Element {
+  const head = layout.headStation
+  if (!head) return <></>
+  const name = status?.current ?? 'HEAD'
+  const w = 110
+  const h = 60
+  const bx = head.x + 18
+  const by = head.y - h / 2
   return (
-    <div
-      className="absolute top-0 bottom-0 left-0 z-10 bg-bg-subtle/95 backdrop-blur border-r border-line overflow-hidden"
-      style={{ width: LABEL_WIDTH }}
-    >
-      <div className="px-3 pt-3 pb-2 text-[10px] uppercase tracking-wider text-muted">
-        Lines
+    <g pointerEvents="none">
+      <line
+        x1={head.x}
+        y1={head.y}
+        x2={bx}
+        y2={head.y}
+        stroke={head.color}
+        strokeWidth={3.5}
+        strokeLinecap="round"
+      />
+      <rect
+        x={bx}
+        y={by}
+        width={w}
+        height={h}
+        rx={10}
+        fill={`${head.color}1a`}
+        stroke={head.color}
+        strokeWidth={1.8}
+      />
+      {/* small terminus icon (square + diagonal) */}
+      <rect
+        x={bx + 10}
+        y={by + 12}
+        width={16}
+        height={16}
+        rx={3}
+        fill={head.color}
+        opacity={0.9}
+      />
+      <text
+        x={bx + 18}
+        y={by + 24}
+        textAnchor="middle"
+        fontSize={11}
+        fontWeight={700}
+        fill="#0b0e14"
+        className="font-mono"
+      >
+        ◢
+      </text>
+      <text
+        x={bx + 32}
+        y={by + 22}
+        fontSize={12}
+        fontWeight={700}
+        fill={head.color}
+        className="font-mono"
+      >
+        {truncate(name, 11)}
+      </text>
+      <text
+        x={bx + 32}
+        y={by + 36}
+        fontSize={10}
+        fontWeight={600}
+        fill={head.color}
+        opacity={0.85}
+        className="font-mono"
+      >
+        HEAD
+      </text>
+      <text
+        x={bx + 32}
+        y={by + 50}
+        fontSize={9}
+        fill="#9aa3b8"
+        className="font-mono"
+      >
+        {head.relativeDate}
+      </text>
+    </g>
+  )
+}
+
+interface AheadBadgeProps {
+  layout: MetroLayout
+  status: { current: string | null; ahead: number; behind: number } | null
+}
+
+function AheadBadge({ layout, status }: AheadBadgeProps): JSX.Element {
+  if (!status || (status.ahead === 0 && status.behind === 0)) return <></>
+  const head = layout.headStation
+  if (!head) return <></>
+  const text =
+    status.ahead > 0 && status.behind > 0
+      ? `↑${status.ahead} ↓${status.behind}`
+      : status.ahead > 0
+        ? `${status.ahead} ahead`
+        : `${status.behind} behind`
+  const w = text.length * 7 + 28
+  const h = 22
+  const bx = head.x - w - 24
+  const by = head.y - layout.laneHeight * 0.55
+  return (
+    <g pointerEvents="none">
+      <rect
+        x={bx}
+        y={by}
+        width={w}
+        height={h}
+        rx={h / 2}
+        fill="#0b0e14"
+        stroke={head.color}
+        strokeWidth={1.5}
+      />
+      {/* tiny train icon */}
+      <rect x={bx + 7} y={by + 6} width={10} height={10} rx={1.5} fill={head.color} />
+      <text
+        x={bx + 22}
+        y={by + h / 2 + 4}
+        fontSize={11}
+        fontWeight={600}
+        fill={head.color}
+        className="font-mono"
+      >
+        {text}
+      </text>
+    </g>
+  )
+}
+
+// ── Overlays (non-SVG) ─────────────────────────────────────────────────────
+
+/** Compass + "Follow the flow" overlay anchored top-left. */
+function CompassOverlay(): JSX.Element {
+  return (
+    <div className="absolute top-3 left-3 z-20 flex items-center gap-2.5 bg-bg-panel/80 border border-line rounded-lg pl-2 pr-3 py-1.5 backdrop-blur shadow-lg">
+      <div className="w-9 h-9 rounded-full bg-bg-subtle border border-line flex items-center justify-center text-accent">
+        <Compass size={18} strokeWidth={1.8} />
       </div>
-      <div className="relative" style={{ height: layout.height }}>
-        {Array.from({ length: layout.laneCount }, (_, lane) => {
-          const label = layout.laneLabels.find((l) => l.lane === lane)
-          const y = layout.topPad + lane * layout.laneHeight + layout.laneHeight / 2
-          const color = laneColor(lane)
-          const dim = !highlight(lane)
-          return (
-            <div
-              key={`rail-${lane}`}
-              className="absolute left-0 right-0 flex items-center gap-2 px-3"
-              style={{
-                top: y - layout.laneHeight / 2,
-                height: layout.laneHeight,
-                opacity: dim ? 0.4 : 1
-              }}
-            >
-              <span
-                className="inline-block w-2 h-2 rounded-full shrink-0"
-                style={{ backgroundColor: color }}
-              />
-              <span
-                className="text-[12px] font-mono truncate"
-                style={{ color: label ? color : '#5a6275' }}
-                title={label?.name ?? `lane ${lane}`}
-              >
-                {label?.name ?? `lane ${lane + 1}`}
-              </span>
-            </div>
-          )
-        })}
+      <div className="flex flex-col leading-tight">
+        <span className="text-[11px] uppercase tracking-wider text-muted">Legend</span>
+        <span className="text-[12px] text-text font-medium">Follow the flow →</span>
       </div>
     </div>
+  )
+}
+
+interface ZoomControlsProps {
+  zoom: number
+  onFit: () => void
+  onIn: () => void
+  onOut: () => void
+}
+
+function ZoomControls({ zoom, onFit, onIn, onOut }: ZoomControlsProps): JSX.Element {
+  return (
+    <div className="absolute bottom-3 left-3 z-20 flex items-center gap-0.5 bg-bg-panel/95 border border-line rounded-md backdrop-blur shadow-lg">
+      <ZoomButton onClick={onFit} title="Fit map">
+        <Maximize2 size={13} />
+        <span className="ml-1 text-[11px]">Fit</span>
+      </ZoomButton>
+      <span className="w-px h-5 bg-line" />
+      <ZoomButton onClick={onIn} title="Zoom in" disabled={zoom >= ZOOM_MAX}>
+        <Plus size={13} />
+      </ZoomButton>
+      <ZoomButton onClick={onOut} title="Zoom out" disabled={zoom <= ZOOM_MIN}>
+        <Minus size={13} />
+      </ZoomButton>
+      <span className="w-px h-5 bg-line" />
+      <span className="px-2 text-[10px] text-muted font-mono tabular-nums">
+        {Math.round(zoom * 100)}%
+      </span>
+      <span className="w-px h-5 bg-line" />
+      <ZoomButton onClick={() => undefined} title="Pinned (always shows HEAD)">
+        <Lock size={13} />
+      </ZoomButton>
+      <span className="w-px h-5 bg-line" />
+      <span className="px-2 text-[10px] text-muted inline-flex items-center gap-1">
+        <CheckCircle2 size={11} className="text-success" />
+        {/* spacing reserved for inline help; not currently shown */}
+        <Tag size={11} className="text-success/0 -ml-2" />
+      </span>
+    </div>
+  )
+}
+
+function ZoomButton({
+  onClick,
+  title,
+  disabled,
+  children
+}: {
+  onClick: () => void
+  title: string
+  disabled?: boolean
+  children: React.ReactNode
+}): JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className="px-2 py-1.5 text-text hover:bg-line disabled:opacity-40 disabled:hover:bg-transparent inline-flex items-center"
+    >
+      {children}
+    </button>
   )
 }

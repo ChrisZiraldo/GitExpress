@@ -8,7 +8,7 @@ interface Schema {
 }
 
 const store = new Store<Schema>({
-  name: 'git-express-config',
+  name: 'git-metro-config',
   defaults: {
     recents: [],
     windowBounds: { width: 1280, height: 820 },
@@ -16,16 +16,20 @@ const store = new Store<Schema>({
   },
   migrations: {
     '0.1.0': (s) => {
-      try {
-        const legacy = new Store<Schema>({ name: 'simplegit-config' })
-        const legacyRecents = legacy.get('recents')
-        if (legacyRecents?.length && !s.get('recents')?.length) {
-          s.set('recents', legacyRecents)
-          s.set('windowBounds', legacy.get('windowBounds'))
-          s.set('lastRepoPath', legacy.get('lastRepoPath') ?? '')
+      const legacyStoreNames = ['git-express-config', 'simplegit-config']
+      for (const legacyName of legacyStoreNames) {
+        try {
+          const legacy = new Store<Schema>({ name: legacyName })
+          const legacyRecents = legacy.get('recents')
+          if (legacyRecents?.length && !s.get('recents')?.length) {
+            s.set('recents', legacyRecents)
+            s.set('windowBounds', legacy.get('windowBounds'))
+            s.set('lastRepoPath', legacy.get('lastRepoPath') ?? '')
+            return
+          }
+        } catch {
+          // ignore — legacy store may not exist
         }
-      } catch {
-        // ignore — legacy store may not exist
       }
     }
   }

@@ -32,10 +32,28 @@ export interface MetroLaneLabel {
   y: number
 }
 
+export interface MetroTerminal {
+  lane: number
+  name: string
+  color: string
+  /** x coordinate where the badge is anchored (just left of the lane's leftmost station) */
+  x: number
+  y: number
+  /** True if the branch has no upstream / appears stale. Renderer should dash its line. */
+  stale: boolean
+}
+
 export interface MetroLayout {
   rows: GraphRow[]
   stations: MetroStation[]
   laneLabels: MetroLaneLabel[]
+  terminals: MetroTerminal[]
+  /** Hash → boolean: lane that terminates at this commit is stale. */
+  staleLanes: Set<number>
+  /** Stations that should display a green tag badge along the line. */
+  tagStations: MetroStation[]
+  /** The HEAD station, if found. */
+  headStation: MetroStation | null
   /** Number of lanes used (laneHeight rows). */
   laneCount: number
   /** Pixel size of each commit column along the time axis. */
@@ -50,6 +68,8 @@ export interface MetroLayout {
   height: number
   /** Total number of commit columns. */
   cols: number
+  /** y coordinate of the HEAD lane (used for the "X ahead" badge near HEAD). */
+  headLaneY: number | null
 }
 
 export interface MetroLayoutOpts {
@@ -73,12 +93,12 @@ export function computeMetroLayout(
   currentBranch: string | null,
   opts: MetroLayoutOpts = {}
 ): MetroLayout {
-  const colWidth = opts.colWidth ?? 56
-  const laneHeight = opts.laneHeight ?? 56
-  const leftPad = opts.leftPad ?? 24
-  const rightPad = opts.rightPad ?? 96
-  const topPad = opts.topPad ?? 40
-  const bottomPad = opts.bottomPad ?? 56
+  const colWidth = opts.colWidth ?? 92
+  const laneHeight = opts.laneHeight ?? 80
+  const leftPad = opts.leftPad ?? 120
+  const rightPad = opts.rightPad ?? 240
+  const topPad = opts.topPad ?? 64
+  const bottomPad = opts.bottomPad ?? 72
 
   const laneLayout = computeLanes(graph)
   const cols = laneLayout.rows.length
@@ -176,6 +196,45 @@ export function computeMetroLayout(
   }
   laneLabels.sort((a, b) => a.lane - b.lane)
 
+  // Compute the leftmost x per lane (i.e. the oldest row index where the lane is live)
+  const laneMaxRow = new Map<number, number>()
+  for (let i = 0; i < laneLayout.rows.length; i++) {
+    const row = laneLayout.rows[i]
+    if (!laneMaxRow.has(row.lane) || (laneMaxRow.get(row.lane) ?? -1) < i)
+      laneMaxRow.set(row.lane, i)
+    for (let l = 0; l < row.liveLanes.length; l++) {
+      if (row.liveLanes[l] !== null) {
+        if (!laneMaxRow.has(l) || (laneMaxRow.get(l) ?? -1) < i) laneMaxRow.set(l, i)
+      }
+    }
+  }
+
+  // Stale-lane detection: branches without an upstream / not the current branch.
+  const staleLanes = new Set<number>()
+  for (const [lane, name] of laneBranchName.entries()) {
+    const r = refs.local.find((ref) => ref.name === name)
+    if (!r) continue
+    if (!r.upstream && !r.current) staleLanes.add(lane)
+  }
+
+  const terminals: MetroTerminal[] = []
+  for (const label of laneLabels) {
+    const maxRow = laneMaxRow.get(label.lane) ?? 0
+    const xLeftmost = rx(maxRow)
+    terminals.push({
+      lane: label.lane,
+      name: label.name,
+      color: label.color,
+      x: xLeftmost - colWidth * 0.55,
+      y: label.y,
+      stale: staleLanes.has(label.lane)
+    })
+  }
+
+  const tagStations = stations.filter((s) => s.hasTag)
+  const headStation = stations.find((s) => s.isHead) ?? null
+  const headLaneY = headStation ? headStation.y : null
+
   const width = leftPad + cols * colWidth + rightPad
   const height = topPad + laneCount * laneHeight + bottomPad
 
@@ -183,6 +242,10 @@ export function computeMetroLayout(
     rows: laneLayout.rows,
     stations,
     laneLabels,
+    terminals,
+    staleLanes,
+    tagStations,
+    headStation,
     laneCount,
     colWidth,
     laneHeight,
@@ -192,6 +255,7 @@ export function computeMetroLayout(
     bottomPad,
     width,
     height,
-    cols
+    cols,
+    headLaneY
   }
 }

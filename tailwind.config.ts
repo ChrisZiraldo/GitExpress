@@ -22,15 +22,15 @@ const config: Config = {
         warn: '#f5a623',
         // Transit-line palette
         transit: {
-          blue: '#5b8cff',
-          purple: '#a672ff',
-          green: '#3ecf8e',
-          teal: '#56cfe1',
-          orange: '#ff8a5b',
-          red: '#ff5d6c',
-          yellow: '#ffd166',
-          gray: '#5a6275',
-          pink: '#ff8fab'
+          blue: '#3b82f6',
+          purple: '#a855f7',
+          green: '#22c55e',
+          teal: '#14b8a6',
+          orange: '#f97316',
+          red: '#ef4444',
+          yellow: '#eab308',
+          gray: '#64748b',
+          pink: '#ec4899'
         },
         track: '#1a2030'
       },

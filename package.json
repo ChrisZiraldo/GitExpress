@@ -1,9 +1,9 @@
 {
-  "name": "git-express",
+  "name": "git-metro",
   "version": "0.1.0",
-  "description": "Git Express — Next Stop Main. A polished Electron-based Git client that visualizes history as a subway map.",
+  "description": "Git Metro — read your repo like a subway map. A polished Electron-based Git client that visualizes history as a transit line.",
   "main": "out/main/index.js",
-  "author": "Git Express",
+  "author": "Git Metro",
   "license": "MIT",
   "private": true,
   "scripts": {
