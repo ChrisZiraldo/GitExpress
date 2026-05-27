@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useRepo } from '../store/useRepo'
 import type { FileChangeType, FileEntry } from '@shared/types'
+import { ContextMenu, type MenuItem } from './ContextMenu'
 
 interface Props {
   onRefresh: () => Promise<void>
@@ -38,6 +39,8 @@ export function StatusPanel({ onRefresh }: Props): JSX.Element {
 
   // Track which file key (path:staged) is in pending-confirm state for discard
   const [pendingDiscard, setPendingDiscard] = useState<string | null>(null)
+  // Right-click context menu state
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
 
   const unstagedAll = useMemo(
     () => [...(status?.unstaged ?? []), ...(status?.untracked ?? [])],
@@ -67,17 +70,14 @@ export function StatusPanel({ onRefresh }: Props): JSX.Element {
   ): Promise<void> => {
     const key = `${path}:${staged}`
     if (pendingDiscard !== key) {
-      // First click — arm the confirm state; auto-cancel after 3 s
       setPendingDiscard(key)
       setTimeout(() => setPendingDiscard((cur) => (cur === key ? null : cur)), 3000)
       return
     }
-    // Second click — execute
     setPendingDiscard(null)
     const res = await window.git.stage.discard(activeRepo.path, path, staged, changeType)
     if (!res.ok) pushToast('error', `Discard failed: ${res.stderr}`)
     else pushToast('info', `Discarded ${path}`)
-    // Clear selection if we discarded the selected file
     if (selectedFile?.path === path) setSelectedFile(null)
     await onRefresh()
   }
@@ -91,6 +91,56 @@ export function StatusPanel({ onRefresh }: Props): JSX.Element {
     selectedFile?.path === path && selectedFile?.staged === staged
 
   const discardKey = (path: string, staged: boolean): string => `${path}:${staged}`
+
+  const openFileContextMenu = (e: React.MouseEvent, entry: FileEntry): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    const fullPath = `${activeRepo.path}/${entry.path}`
+    const items: MenuItem[] = [
+      entry.staged
+        ? { label: 'Unstage', onClick: () => unstage([entry.path]) }
+        : { label: 'Stage', onClick: () => stage([entry.path]) },
+      {
+        label:
+          entry.changeType === 'untracked'
+            ? 'Delete file'
+            : entry.staged
+              ? 'Discard staged changes'
+              : 'Discard changes',
+        danger: true,
+        onClick: () => discard(entry.path, entry.staged, entry.changeType)
+      },
+      { type: 'separator' },
+      {
+        label: 'Stash this file',
+        disabled: entry.staged,
+        onClick: () => {
+          window.dispatchEvent(
+            new CustomEvent('gitmetro:stash-files', { detail: { paths: [entry.path] } })
+          )
+        }
+      },
+      { type: 'separator' },
+      {
+        label: 'Open in editor',
+        onClick: () => window.git.shell.openPath(fullPath)
+      },
+      {
+        label: 'Show in Finder',
+        onClick: () => window.git.shell.revealInFolder(fullPath)
+      },
+      { type: 'separator' },
+      {
+        label: 'Copy file path',
+        onClick: () => navigator.clipboard.writeText(entry.path)
+      },
+      {
+        label: 'Copy full path',
+        onClick: () => navigator.clipboard.writeText(fullPath)
+      }
+    ]
+    setCtxMenu({ x: e.clientX, y: e.clientY, items })
+  }
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -106,6 +156,7 @@ export function StatusPanel({ onRefresh }: Props): JSX.Element {
               onAction={() => stage([f.path])}
               confirming={pendingDiscard === discardKey(f.path, false)}
               onDiscard={() => discard(f.path, false, f.changeType)}
+              onContextMenu={(e) => openFileContextMenu(e, f)}
             />
           ))}
         </Section>
@@ -133,6 +184,7 @@ export function StatusPanel({ onRefresh }: Props): JSX.Element {
               onAction={() => unstage([f.path])}
               confirming={pendingDiscard === discardKey(f.path, true)}
               onDiscard={() => discard(f.path, true, f.changeType)}
+              onContextMenu={(e) => openFileContextMenu(e, f)}
             />
           ))
         )}
@@ -160,10 +212,20 @@ export function StatusPanel({ onRefresh }: Props): JSX.Element {
               onAction={() => stage([f.path])}
               confirming={pendingDiscard === discardKey(f.path, false)}
               onDiscard={() => discard(f.path, false, f.changeType)}
+              onContextMenu={(e) => openFileContextMenu(e, f)}
             />
           ))
         )}
       </Section>
+
+      {ctxMenu && (
+        <ContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          items={ctxMenu.items}
+          onClose={() => setCtxMenu(null)}
+        />
+      )}
     </div>
   )
 }
@@ -210,6 +272,7 @@ interface FileRowProps {
   onAction: () => void
   confirming: boolean
   onDiscard: () => void
+  onContextMenu: (e: React.MouseEvent) => void
 }
 
 function FileRow({
@@ -219,12 +282,14 @@ function FileRow({
   actionLabel,
   onAction,
   confirming,
-  onDiscard
+  onDiscard,
+  onContextMenu
 }: FileRowProps): JSX.Element {
   const badge = changeBadge(entry)
   return (
     <div
       onClick={onClick}
+      onContextMenu={onContextMenu}
       className={
         'group flex items-center px-3 py-1 text-sm cursor-pointer ' +
         (selected ? 'bg-accent/20' : 'hover:bg-bg-panel')

@@ -48,7 +48,6 @@ interface RepoState {
   diffLoading: boolean
   busy: boolean
   drawerHeight: number
-  viewMode: 'simple' | 'advanced'
   refreshVersion: number
   toasts: ToastEntry[]
   // Metro UI state
@@ -73,7 +72,6 @@ interface RepoState {
   setDiffLoading: (loading: boolean) => void
   setBusy: (busy: boolean) => void
   setDrawerHeight: (h: number) => void
-  setViewMode: (mode: 'simple' | 'advanced') => void
   setMetroViewTab: (tab: MetroViewTab) => void
   setSearchQuery: (q: string) => void
   setHighlightedBranchId: (id: string | null) => void
@@ -111,9 +109,15 @@ function writePref(key: string, value: string): void {
   }
 }
 
-function loadViewMode(): 'simple' | 'advanced' {
-  const v = readPref('viewMode')
-  return v === 'advanced' ? 'advanced' : 'simple'
+// Legacy `viewMode` preference is no longer used — the metro view is the
+// only view. Best-effort cleanup of the stored value so reinstalls start
+// fresh, but don't fail if storage is unavailable.
+try {
+  localStorage.removeItem('gitmetro.viewMode')
+  localStorage.removeItem('gitexpress.viewMode')
+  localStorage.removeItem('simplegit.viewMode')
+} catch {
+  /* ignore */
 }
 
 function loadDrawerHeight(): number {
@@ -142,7 +146,6 @@ export const useRepo = create<RepoState>((set) => ({
   diffLoading: false,
   busy: false,
   drawerHeight: loadDrawerHeight(),
-  viewMode: loadViewMode(),
   refreshVersion: 0,
   toasts: [],
   metroViewTab: 'history',
@@ -192,10 +195,6 @@ export const useRepo = create<RepoState>((set) => ({
   setDrawerHeight: (h) => {
     writePref('drawerHeight', String(h))
     set({ drawerHeight: h })
-  },
-  setViewMode: (mode) => {
-    writePref('viewMode', mode)
-    set({ viewMode: mode })
   },
   setMetroViewTab: (tab) => set({ metroViewTab: tab }),
   setSearchQuery: (q) => set({ searchQuery: q }),

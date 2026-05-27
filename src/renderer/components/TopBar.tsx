@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Search,
   ChevronDown,
@@ -10,9 +10,12 @@ import {
   Archive,
   Settings,
   Layers,
-  Maximize2
+  Maximize2,
+  RotateCcw,
+  Home
 } from 'lucide-react'
 import { useRepo, type MetroViewTab } from '../store/useRepo'
+import type { FileEntry } from '@shared/types'
 
 const TABS: { id: MetroViewTab; label: string }[] = [
   { id: 'history', label: 'History' },
@@ -21,11 +24,7 @@ const TABS: { id: MetroViewTab; label: string }[] = [
   { id: 'ownership', label: 'Ownership' }
 ]
 
-interface TopBarProps {
-  onSwitchSimple: () => Promise<void>
-}
-
-export function TopBar({ onSwitchSimple }: TopBarProps): JSX.Element {
+export function TopBar(): JSX.Element {
   const activeRepo = useRepo((s) => s.activeRepo)
   const recents = useRepo((s) => s.recents)
   const status = useRepo((s) => s.status)
@@ -50,28 +49,17 @@ export function TopBar({ onSwitchSimple }: TopBarProps): JSX.Element {
   const [newBranchName, setNewBranchName] = useState('')
   const [stashOpen, setStashOpen] = useState(false)
   const [stashMessage, setStashMessage] = useState('')
-  const [includeUntracked, setIncludeUntracked] = useState(() => {
-    try {
-      return (
-        localStorage.getItem('gitmetro.stashUntracked') === '1' ||
-        localStorage.getItem('gitexpress.stashUntracked') === '1' ||
-        localStorage.getItem('simplegit.stashUntracked') === '1'
-      )
-    } catch {
-      return false
-    }
-  })
-
-  useEffect(() => {
-    try {
-      localStorage.setItem('gitmetro.stashUntracked', includeUntracked ? '1' : '0')
-    } catch {
-      /* ignore */
-    }
-  }, [includeUntracked])
+  const [stashSelected, setStashSelected] = useState<Set<string>>(new Set())
+  const [confirmReset, setConfirmReset] = useState(false)
 
   const branch = status?.branch
   const branchName = branch?.detached ? 'DETACHED' : branch?.current ?? '...'
+  const onMain = branchName === 'main' || branchName === 'master'
+
+  const changedFiles = useMemo<FileEntry[]>(() => {
+    if (!status) return []
+    return [...status.unstaged, ...status.untracked, ...status.staged]
+  }, [status])
 
   const runWithBusy = async (
     label: string,
@@ -114,6 +102,26 @@ export function TopBar({ onSwitchSimple }: TopBarProps): JSX.Element {
   const push = (): Promise<void> =>
     runWithBusy('Push', () => window.git.remote.push(activeRepo!.path, {}))
 
+  const switchToMain = async (): Promise<void> => {
+    const mainBranch = refs.local.find((r) => r.name === 'main' || r.name === 'master')
+    const target = mainBranch?.name ?? 'main'
+    await runWithBusy(`Switch to ${target}`, () =>
+      window.git.branch.checkout(activeRepo!.path, target)
+    )
+  }
+
+  const resetToRemote = async (): Promise<void> => {
+    if (!confirmReset) {
+      setConfirmReset(true)
+      setTimeout(() => setConfirmReset(false), 4000)
+      return
+    }
+    setConfirmReset(false)
+    await runWithBusy('Reset to remote', () =>
+      window.git.branch.resetToRemote(activeRepo!.path)
+    )
+  }
+
   const submitNewBranch = async (): Promise<void> => {
     const name = newBranchName.trim()
     if (!name) return
@@ -124,16 +132,47 @@ export function TopBar({ onSwitchSimple }: TopBarProps): JSX.Element {
     )
   }
 
-  const submitStash = async (): Promise<void> => {
-    const message = stashMessage.trim()
-    setStashOpen(false)
+  const openStashDialog = (preselected?: string[]): void => {
+    if (!activeRepo) return
+    const allPaths = changedFiles.map((f) => f.path)
+    const pre = preselected && preselected.length > 0
+      ? new Set(preselected.filter((p) => allPaths.includes(p)))
+      : new Set(allPaths)
+    setStashSelected(pre)
     setStashMessage('')
+    setStashOpen(true)
+  }
+
+  // Allow other components (e.g. file context menu) to request opening the
+  // stash dialog with a specific set of files preselected.
+  useEffect(() => {
+    const onStashFiles = (e: Event): void => {
+      const detail = (e as CustomEvent<{ paths?: string[] }>).detail
+      openStashDialog(detail?.paths)
+    }
+    window.addEventListener('gitmetro:stash-files', onStashFiles as EventListener)
+    return () =>
+      window.removeEventListener('gitmetro:stash-files', onStashFiles as EventListener)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRepo, changedFiles])
+
+  const submitStash = async (): Promise<void> => {
+    if (!activeRepo) return
+    setStashOpen(false)
+    const message = stashMessage.trim()
+    const paths = [...stashSelected]
+    const hasUntracked = changedFiles
+      .filter((f) => stashSelected.has(f.path))
+      .some((f) => f.changeType === 'untracked')
+    const subset = paths.length > 0 && paths.length < changedFiles.length
     await runWithBusy('Stash', () =>
       window.git.stash.push(activeRepo!.path, {
         message: message || undefined,
-        includeUntracked
+        includeUntracked: hasUntracked,
+        paths: subset ? paths : undefined
       })
     )
+    setStashMessage('')
   }
 
   const popStash = async (): Promise<void> => {
@@ -309,6 +348,14 @@ export function TopBar({ onSwitchSimple }: TopBarProps): JSX.Element {
       <div className="ml-auto flex items-center gap-1 titlebar-nodrag shrink-0">
         {activeRepo && (
           <>
+            {!onMain && (
+              <ToolIconButton
+                onClick={switchToMain}
+                disabled={busy}
+                title="Switch to main / master"
+                icon={<Home size={14} />}
+              />
+            )}
             <ToolIconButton
               onClick={fetchAll}
               disabled={busy}
@@ -328,6 +375,26 @@ export function TopBar({ onSwitchSimple }: TopBarProps): JSX.Element {
               icon={<ArrowUpFromLine size={14} />}
               primary
             />
+            {branch?.upstream && (
+              <button
+                onClick={resetToRemote}
+                disabled={busy}
+                title={
+                  confirmReset
+                    ? 'Click again to confirm — discards local commits!'
+                    : `Hard reset to ${branch.upstream}`
+                }
+                className={
+                  'p-1.5 rounded-md disabled:opacity-40 flex items-center gap-1 ' +
+                  (confirmReset
+                    ? 'bg-danger text-white animate-pulse'
+                    : 'bg-bg-panel hover:bg-line text-warn')
+                }
+              >
+                <RotateCcw size={14} />
+                {confirmReset && <span className="text-xs font-medium pr-1">Confirm?</span>}
+              </button>
+            )}
             <Divider />
             <ToolIconButton
               onClick={() => setNewBranchOpen(true)}
@@ -336,8 +403,8 @@ export function TopBar({ onSwitchSimple }: TopBarProps): JSX.Element {
               icon={<GitBranch size={14} />}
             />
             <ToolIconButton
-              onClick={() => setStashOpen(true)}
-              disabled={busy}
+              onClick={() => openStashDialog()}
+              disabled={busy || changedFiles.length === 0}
               title="Stash changes"
               icon={<Archive size={14} />}
             />
@@ -351,16 +418,6 @@ export function TopBar({ onSwitchSimple }: TopBarProps): JSX.Element {
           </>
         )}
 
-        <button
-          onClick={onSwitchSimple}
-          title="Switch to Simple view"
-          className="px-2 py-1 rounded-md bg-bg-panel hover:bg-line text-xs text-muted hover:text-text border border-line"
-        >
-          Simple
-        </button>
-        <span className="px-2 py-1 rounded-md bg-accent text-white text-xs font-medium border border-accent">
-          Metro
-        </span>
         <ToolIconButton
           onClick={() => {
             window.dispatchEvent(new CustomEvent('gitmetro:fit'))
@@ -397,32 +454,29 @@ export function TopBar({ onSwitchSimple }: TopBarProps): JSX.Element {
       )}
 
       {stashOpen && (
-        <Modal title="Stash changes" onClose={() => setStashOpen(false)}>
-          <input
-            autoFocus
-            value={stashMessage}
-            onChange={(e) => setStashMessage(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void submitStash()
-              if (e.key === 'Escape') setStashOpen(false)
-            }}
-            placeholder="Stash message (optional)"
-            className="w-full px-2 py-1.5 bg-bg-subtle border border-line rounded text-sm focus:outline-none focus:border-accent"
-          />
-          <label className="mt-3 flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={includeUntracked}
-              onChange={(e) => setIncludeUntracked(e.target.checked)}
-            />
-            Include untracked files
-          </label>
-          <ModalActions
-            onCancel={() => setStashOpen(false)}
-            onSubmit={submitStash}
-            submitLabel="Stash"
-          />
-        </Modal>
+        <StashDialog
+          files={changedFiles}
+          selected={stashSelected}
+          message={stashMessage}
+          onToggleFile={(path) =>
+            setStashSelected((prev) => {
+              const next = new Set(prev)
+              if (next.has(path)) next.delete(path)
+              else next.add(path)
+              return next
+            })
+          }
+          onToggleAll={() =>
+            setStashSelected((prev) =>
+              prev.size === changedFiles.length
+                ? new Set()
+                : new Set(changedFiles.map((f) => f.path))
+            )
+          }
+          onMessageChange={setStashMessage}
+          onConfirm={submitStash}
+          onCancel={() => setStashOpen(false)}
+        />
       )}
     </div>
   )
@@ -535,6 +589,126 @@ function ModalActions({ onCancel, onSubmit, submitLabel }: ModalActionsProps): J
       >
         {submitLabel}
       </button>
+    </div>
+  )
+}
+
+interface StashDialogProps {
+  files: FileEntry[]
+  selected: Set<string>
+  message: string
+  onToggleFile: (path: string) => void
+  onToggleAll: () => void
+  onMessageChange: (v: string) => void
+  onConfirm: () => void
+  onCancel: () => void
+}
+
+function changeBadge(entry: FileEntry): { label: string; cls: string } {
+  switch (entry.changeType) {
+    case 'added': return { label: 'A', cls: 'text-success' }
+    case 'modified': return { label: 'M', cls: 'text-accent' }
+    case 'deleted': return { label: 'D', cls: 'text-danger' }
+    case 'renamed': return { label: 'R', cls: 'text-warn' }
+    case 'copied': return { label: 'C', cls: 'text-warn' }
+    case 'untracked': return { label: '?', cls: 'text-muted' }
+    default: return { label: ' ', cls: 'text-muted' }
+  }
+}
+
+function StashDialog({
+  files,
+  selected,
+  message,
+  onToggleFile,
+  onToggleAll,
+  onMessageChange,
+  onConfirm,
+  onCancel
+}: StashDialogProps): JSX.Element {
+  const allSelected = selected.size === files.length && files.length > 0
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onCancel()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [onCancel])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/50" onClick={onCancel} />
+      <div className="relative bg-bg-panel border border-line rounded-lg shadow-2xl w-[420px] max-h-[520px] flex flex-col titlebar-nodrag">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-line shrink-0">
+          <span className="font-semibold text-sm">Stash Changes</span>
+          <button onClick={onCancel} className="text-muted hover:text-text text-lg leading-none">✕</button>
+        </div>
+
+        <div className="px-4 pt-3 pb-2 shrink-0">
+          <label className="block text-xs text-muted mb-1">Message (optional)</label>
+          <input
+            autoFocus
+            value={message}
+            onChange={(e) => onMessageChange(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && selected.size > 0) onConfirm() }}
+            placeholder="WIP description…"
+            className="w-full px-2.5 py-1.5 bg-bg border border-line rounded-md text-sm focus:outline-none focus:border-accent"
+          />
+        </div>
+
+        <div className="px-4 pb-1 shrink-0">
+          <div className="flex items-center justify-between mb-1">
+            <label className="text-xs text-muted">Files to stash</label>
+            <button
+              onClick={onToggleAll}
+              className="text-xs text-accent hover:text-accent-hover"
+            >
+              {allSelected ? 'Deselect all' : 'Select all'}
+            </button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto px-4 pb-3 min-h-0">
+          {files.length === 0 ? (
+            <div className="text-xs text-muted italic py-2">No changed files</div>
+          ) : (
+            files.map((f) => {
+              const badge = changeBadge(f)
+              return (
+                <label
+                  key={f.path}
+                  className="flex items-center gap-2 py-1 cursor-pointer hover:bg-bg-subtle rounded px-1 -mx-1"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(f.path)}
+                    onChange={() => onToggleFile(f.path)}
+                    className="accent-[#5b8cff] shrink-0"
+                  />
+                  <span className={`font-mono text-xs w-4 shrink-0 ${badge.cls}`}>{badge.label}</span>
+                  <span className="text-xs truncate flex-1">{f.path}</span>
+                  {f.staged && <span className="text-xs text-muted shrink-0">staged</span>}
+                </label>
+              )
+            })
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-line shrink-0">
+          <button
+            onClick={onCancel}
+            className="px-3 py-1.5 text-sm rounded-md bg-bg-subtle hover:bg-line"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={selected.size === 0}
+            className="px-3 py-1.5 text-sm rounded-md bg-accent hover:bg-accent-hover text-white font-medium disabled:opacity-40"
+          >
+            Stash {selected.size > 0 && selected.size < files.length ? `${selected.size} file${selected.size > 1 ? 's' : ''}` : 'all'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
