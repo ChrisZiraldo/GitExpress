@@ -186,12 +186,12 @@ export function computeMetroLayout(
   currentBranch: string | null,
   opts: MetroLayoutOpts = {}
 ): MetroLayout {
-  const colWidth = opts.colWidth ?? 92
-  const laneHeight = opts.laneHeight ?? 80
-  const leftPad = opts.leftPad ?? 120
-  const rightPad = opts.rightPad ?? 240
-  const topPad = opts.topPad ?? 64
-  const bottomPad = opts.bottomPad ?? 72
+  const colWidth = opts.colWidth ?? 52
+  const laneHeight = opts.laneHeight ?? 56
+  const leftPad = opts.leftPad ?? 96
+  const rightPad = opts.rightPad ?? 200
+  const topPad = opts.topPad ?? 44
+  const bottomPad = opts.bottomPad ?? 56
 
   // Pin all local branch tips so sibling branches never share a lane.
   const pinnedTips = new Set<string>()
