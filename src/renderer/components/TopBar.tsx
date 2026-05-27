@@ -24,6 +24,12 @@ const TABS: { id: MetroViewTab; label: string }[] = [
   { id: 'ownership', label: 'Ownership' }
 ]
 
+// On macOS the window uses `titleBarStyle: 'hiddenInset'`, which places the
+// traffic-light buttons (close/minimize/maximize) in the top-left corner of
+// the window. Reserve space so the wordmark doesn't sit underneath them.
+const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent)
+const TITLEBAR_LEADING_PAD = IS_MAC ? 72 : 0
+
 export function TopBar(): JSX.Element {
   const activeRepo = useRepo((s) => s.activeRepo)
   const recents = useRepo((s) => s.recents)
@@ -198,9 +204,12 @@ export function TopBar(): JSX.Element {
     allBranches.find((b) => b.fullName === (highlightedBranchId ?? 'ALL'))?.name ?? 'All Branches'
 
   return (
-    <div className="titlebar-drag h-12 bg-bg-subtle border-b border-line flex items-center px-3 gap-2 shrink-0">
+    <div
+      className="titlebar-drag h-12 bg-bg-subtle border-b border-line flex items-center pr-3 gap-2 shrink-0"
+      style={{ paddingLeft: TITLEBAR_LEADING_PAD + 12 }}
+    >
       {/* Wordmark */}
-      <div className="flex items-center gap-2 pl-2 mr-1 pr-3 border-r border-line shrink-0">
+      <div className="flex items-center gap-2 mr-1 pr-3 border-r border-line shrink-0">
         <div className="w-7 h-7 rounded-md bg-accent/15 border border-accent/40 flex items-center justify-center text-accent">
           <TramFront size={16} strokeWidth={2.25} />
         </div>
