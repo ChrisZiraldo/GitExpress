@@ -1,33 +1,32 @@
 import { useMemo } from 'react'
 import type { MetroLayout } from './computeMetroLayout'
+import { laneColor } from './colors'
 
 interface MiniMapProps {
   layout: MetroLayout
-  viewport: { top: number; height: number }
-  onJump: (yFraction: number) => void
+  viewport: { left: number; width: number }
+  onJump: (xFraction: number) => void
 }
 
+const W = 240
+const H = 80
+
 /**
- * A compact overview of the entire metro map shown bottom-right of the map area.
- * Renders lane lines and station dots at a small scale.
+ * Horizontal overview strip in the bottom-right of the map area. Shows lane
+ * tracks running left → right (matching the main map), all stations as dots,
+ * and a viewport indicator that follows the user's scroll position.
  */
 export function MiniMap({ layout, viewport, onJump }: MiniMapProps): JSX.Element {
-  const W = 160
-  const H = 120
+  const sx = useMemo(() => W / Math.max(layout.width, 1), [layout.width])
+  const sy = useMemo(() => H / Math.max(layout.height, 1), [layout.height])
 
-  const { sy, content } = useMemo(() => {
-    const sxV = W / Math.max(layout.width, 1)
-    const syV = H / Math.max(layout.height, 1)
-    return { sy: syV, content: { sx: sxV, sy: syV } }
-  }, [layout])
-
-  const viewportTop = Math.max(0, viewport.top * sy)
-  const viewportH = Math.max(8, viewport.height * sy)
+  const viewportLeft = Math.max(0, viewport.left * sx)
+  const viewportW = Math.max(10, viewport.width * sx)
 
   const onClick = (e: React.MouseEvent<SVGSVGElement>): void => {
     const rect = (e.currentTarget as SVGSVGElement).getBoundingClientRect()
-    const y = e.clientY - rect.top
-    onJump(y / H)
+    const x = e.clientX - rect.left
+    onJump(x / W)
   }
 
   return (
@@ -41,29 +40,63 @@ export function MiniMap({ layout, viewport, onJump }: MiniMapProps): JSX.Element
         className="cursor-pointer"
       >
         <rect width={W} height={H} fill="#0a0d14" rx={3} />
-        {/* Lane lines from row to row */}
-        {layout.rows.map((row, i) => {
-          const x = row.lane * layout.laneWidth * content.sx + (layout.leftPad + layout.laneWidth / 2) * content.sx
-          const y1 = (layout.topPad + i * layout.rowHeight) * content.sy
-          const y2 = (layout.topPad + (i + 1) * layout.rowHeight) * content.sy
+
+        {/* Lane tracks */}
+        {Array.from({ length: layout.laneCount }, (_, l) => {
+          const y = (layout.topPad + l * layout.laneHeight + layout.laneHeight / 2) * sy
           return (
             <line
-              key={`mm-${row.commit.hash}`}
-              x1={x}
-              y1={y1}
-              x2={x}
-              y2={y2}
-              stroke={laneStrokeColor(row.lane)}
+              key={`track-${l}`}
+              x1={2}
+              x2={W - 2}
+              y1={y}
+              y2={y}
+              stroke={laneColor(l)}
               strokeWidth={1.2}
+              opacity={0.18}
             />
           )
         })}
+
+        {/* Per-row lane segments (so the user can see where branches live) */}
+        {layout.rows.flatMap((row, i) => {
+          const x1 = (layout.leftPad + (layout.cols - 1 - i) * layout.colWidth) * sx
+          const x2 = (layout.leftPad + (layout.cols - i) * layout.colWidth) * sx
+          return row.liveLanes.map((live, l) => {
+            if (live === null) return null
+            const y = (layout.topPad + l * layout.laneHeight + layout.laneHeight / 2) * sy
+            return (
+              <line
+                key={`seg-${i}-${l}`}
+                x1={Math.min(x1, x2)}
+                x2={Math.max(x1, x2)}
+                y1={y}
+                y2={y}
+                stroke={laneColor(l)}
+                strokeWidth={1.4}
+                opacity={0.7}
+              />
+            )
+          })
+        })}
+
+        {/* Stations */}
+        {layout.stations.map((s) => (
+          <circle
+            key={`mm-${s.hash}`}
+            cx={s.x * sx}
+            cy={s.y * sy}
+            r={1.6}
+            fill={s.color}
+          />
+        ))}
+
         {/* Viewport indicator */}
         <rect
-          x={1}
-          y={viewportTop}
-          width={W - 2}
-          height={viewportH}
+          x={viewportLeft}
+          y={1}
+          width={viewportW}
+          height={H - 2}
           fill="#5b8cff22"
           stroke="#5b8cff"
           strokeWidth={1}
@@ -72,10 +105,4 @@ export function MiniMap({ layout, viewport, onJump }: MiniMapProps): JSX.Element
       </svg>
     </div>
   )
-}
-
-// Inline copy of palette to avoid an extra import cycle.
-const PAL = ['#5b8cff', '#a672ff', '#3ecf8e', '#56cfe1', '#ff8a5b', '#ffd166', '#ff8fab', '#5a6275']
-function laneStrokeColor(l: number): string {
-  return PAL[((l % PAL.length) + PAL.length) % PAL.length]
 }

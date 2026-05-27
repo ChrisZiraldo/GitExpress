@@ -10,7 +10,15 @@ export function EmptyState(): JSX.Element {
   const pushToast = useRepo((s) => s.pushToast)
 
   const layout = useMemo(
-    () => computeMetroLayout(MOCK_GRAPH, MOCK_REFS, 'main', { rowHeight: 34, laneWidth: 32 }),
+    () =>
+      computeMetroLayout(MOCK_GRAPH, MOCK_REFS, 'main', {
+        colWidth: 44,
+        laneHeight: 40,
+        leftPad: 16,
+        rightPad: 24,
+        topPad: 28,
+        bottomPad: 28
+      }),
     []
   )
 
@@ -58,53 +66,90 @@ export function EmptyState(): JSX.Element {
           </div>
         </div>
 
-        {/* Right: mini metro preview */}
+        {/* Right: horizontal mini metro preview */}
         <div className="bg-bg-subtle border border-line rounded-lg p-4 shadow-xl overflow-hidden">
           <div className="flex items-center justify-between mb-3">
             <span className="text-[10px] uppercase tracking-wider text-muted">Sample line</span>
-            <span className="text-[10px] text-muted font-mono">demo/main</span>
+            <span className="text-[10px] text-muted font-mono">demo/main → HEAD</span>
           </div>
           <svg
             width="100%"
-            viewBox={`0 0 ${layout.width} ${Math.min(layout.height, 480)}`}
+            viewBox={`0 0 ${layout.width} ${layout.height}`}
             className="block"
-            preserveAspectRatio="xMinYMin meet"
+            preserveAspectRatio="xMidYMid meet"
           >
-            {/* Vertical lane lines */}
+            {/* Horizontal lane segments */}
             {layout.rows.map((row, i) => {
               if (i === layout.rows.length - 1) return null
-              const cx = layout.leftPad + row.lane * layout.laneWidth + layout.laneWidth / 2
-              const y1 = layout.topPad + i * layout.rowHeight + layout.rowHeight / 2
-              const y2 = y1 + layout.rowHeight
-              return (
-                <line
-                  key={`mock-${row.commit.hash}`}
-                  x1={cx}
-                  x2={cx}
-                  y1={y1}
-                  y2={y2}
-                  stroke={laneStroke(row.lane)}
-                  strokeWidth={3}
-                  strokeLinecap="round"
-                />
-              )
+              const x1 = layout.leftPad + (layout.cols - 1 - i) * layout.colWidth + layout.colWidth / 2
+              const x2 = x1 - layout.colWidth
+              const liveAtThisRow = row.liveLanes
+              return liveAtThisRow.map((live, l) => {
+                if (live === null) return null
+                const y = layout.topPad + l * layout.laneHeight + layout.laneHeight / 2
+                return (
+                  <line
+                    key={`mock-${row.commit.hash}-${l}`}
+                    x1={Math.min(x1, x2)}
+                    x2={Math.max(x1, x2)}
+                    y1={y}
+                    y2={y}
+                    stroke={laneStroke(l)}
+                    strokeWidth={3}
+                    strokeLinecap="round"
+                  />
+                )
+              })
+            })}
+            {/* Cross-lane curves for parents */}
+            {layout.rows.flatMap((row, i) => {
+              const elements: JSX.Element[] = []
+              const x1 = layout.leftPad + (layout.cols - 1 - i) * layout.colWidth + layout.colWidth / 2
+              const y1 = layout.topPad + row.lane * layout.laneHeight + layout.laneHeight / 2
+              row.parentLanes.forEach((pl, pi) => {
+                if (pl < 0 || pl === row.lane) return
+                const parentHash = row.commit.parents[pi]
+                const parentRow = layout.rows.findIndex((r) => r.commit.hash === parentHash)
+                if (parentRow === -1) return
+                const x2 = layout.leftPad + (layout.cols - 1 - parentRow) * layout.colWidth + layout.colWidth / 2
+                const y2 = layout.topPad + pl * layout.laneHeight + layout.laneHeight / 2
+                const midX = (x1 + x2) / 2
+                elements.push(
+                  <path
+                    key={`mockc-${row.commit.hash}-${pi}`}
+                    d={`M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`}
+                    fill="none"
+                    stroke={laneStroke(pl)}
+                    strokeWidth={3}
+                    strokeLinecap="round"
+                  />
+                )
+              })
+              return elements
             })}
             {/* Stations */}
             {layout.stations.map((s) => (
               <g key={s.hash}>
                 <circle cx={s.x} cy={s.y} r={6} fill="#0b0e14" stroke={s.color} strokeWidth={2.5} />
                 {s.isHead && <circle cx={s.x} cy={s.y} r={2.5} fill={s.color} />}
-                <text
-                  x={s.x + 14}
-                  y={s.y + 3}
-                  fontSize={10}
-                  fill="#8a93a6"
-                  className="font-mono"
-                >
-                  {s.subject}
-                </text>
               </g>
             ))}
+            {/* HEAD label */}
+            {layout.stations
+              .filter((s) => s.isHead)
+              .map((s) => (
+                <text
+                  key={`hl-${s.hash}`}
+                  x={s.x}
+                  y={s.y - 12}
+                  textAnchor="middle"
+                  fontSize={9}
+                  fill="#5b8cff"
+                  className="font-mono"
+                >
+                  HEAD
+                </text>
+              ))}
           </svg>
         </div>
       </div>

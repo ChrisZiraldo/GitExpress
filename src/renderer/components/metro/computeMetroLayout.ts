@@ -11,9 +11,11 @@ export interface MetroStation {
   author: string
   email: string
   relativeDate: string
-  row: number // row index in the graph (0 = newest)
+  row: number // index in the graph (0 = newest)
   lane: number
+  /** x in pixels along the time axis (newest is largest x) */
   x: number
+  /** y in pixels for this lane */
   y: number
   kind: StationKind
   color: string
@@ -23,14 +25,10 @@ export interface MetroStation {
 }
 
 export interface MetroLaneLabel {
-  /** lane index */
   lane: number
-  /** the branch / ref name shown above the lane (best effort) */
   name: string
   color: string
-  /** x coordinate of the label */
-  x: number
-  /** top y where the label is drawn */
+  /** y coordinate of the lane (horizontal layout) */
   y: number
 }
 
@@ -38,65 +36,80 @@ export interface MetroLayout {
   rows: GraphRow[]
   stations: MetroStation[]
   laneLabels: MetroLaneLabel[]
-  /** map of lane index -> y of first appearance (used for labels) */
-  laneFirstY: Map<number, number>
-  rowHeight: number
-  laneWidth: number
+  /** Number of lanes used (laneHeight rows). */
+  laneCount: number
+  /** Pixel size of each commit column along the time axis. */
+  colWidth: number
+  /** Pixel height of each lane row. */
+  laneHeight: number
   leftPad: number
+  rightPad: number
   topPad: number
+  bottomPad: number
   width: number
   height: number
+  /** Total number of commit columns. */
+  cols: number
 }
 
 export interface MetroLayoutOpts {
-  rowHeight?: number
-  laneWidth?: number
+  colWidth?: number
+  laneHeight?: number
   leftPad?: number
+  rightPad?: number
   topPad?: number
   bottomPad?: number
 }
 
+/**
+ * Computes a horizontal metro-map layout where:
+ *   - x axis is time (oldest → newest, left → right). graph[0] (newest)
+ *     lives at the RIGHTMOST column.
+ *   - y axis is branch lanes stacked top-to-bottom.
+ */
 export function computeMetroLayout(
   graph: GraphCommit[],
   refs: RefSet,
   currentBranch: string | null,
   opts: MetroLayoutOpts = {}
 ): MetroLayout {
-  const rowHeight = opts.rowHeight ?? 40
-  const laneWidth = opts.laneWidth ?? 28
-  const leftPad = opts.leftPad ?? 28
-  const topPad = opts.topPad ?? 36
-  const bottomPad = opts.bottomPad ?? 48
+  const colWidth = opts.colWidth ?? 56
+  const laneHeight = opts.laneHeight ?? 56
+  const leftPad = opts.leftPad ?? 24
+  const rightPad = opts.rightPad ?? 96
+  const topPad = opts.topPad ?? 40
+  const bottomPad = opts.bottomPad ?? 56
 
   const laneLayout = computeLanes(graph)
-  const cx = (lane: number): number => leftPad + lane * laneWidth + laneWidth / 2
-  const cy = (rowIdx: number): number => topPad + rowIdx * rowHeight + rowHeight / 2
+  const cols = laneLayout.rows.length
+  // Oldest (last graph row) at the LEFT; newest (row 0) at the RIGHT.
+  const rx = (rowIdx: number): number =>
+    leftPad + (cols - 1 - rowIdx) * colWidth + colWidth / 2
+  const ly = (lane: number): number => topPad + lane * laneHeight + laneHeight / 2
 
-  // Build refs-by-commit map
+  // Refs by commit
   const refsByCommit = new Map<string, Ref[]>()
-  const push = (r: Ref): void => {
+  const pushRef = (r: Ref): void => {
     const list = refsByCommit.get(r.hash) ?? []
     list.push(r)
     refsByCommit.set(r.hash, list)
   }
-  refs.local.forEach(push)
-  refs.remote.forEach(push)
-  refs.tags.forEach(push)
+  refs.local.forEach(pushRef)
+  refs.remote.forEach(pushRef)
+  refs.tags.forEach(pushRef)
 
   const headRef = currentBranch ? refs.local.find((r) => r.name === currentBranch) : null
   const headHash = headRef?.hash ?? graph[0]?.hash ?? null
 
-  // Track first-seen y per lane (for branch-name labels)
-  const laneFirstRow = new Map<number, number>()
-  const laneFirstBranch = new Map<number, string>()
-
   const stations: MetroStation[] = []
+  const laneFirstRow = new Map<number, number>()
+  const laneBranchName = new Map<number, string>()
 
   for (let i = 0; i < laneLayout.rows.length; i++) {
     const row = laneLayout.rows[i]
     const { commit, lane, parentLanes, mergeFrom } = row
-    const x = cx(lane)
-    const y = cy(i)
+    const x = rx(i)
+    const y = ly(lane)
     const stationRefs = refsByCommit.get(commit.hash) ?? []
     const hasTag = stationRefs.some((r) => r.fullName.startsWith('refs/tags/'))
     const isHead = commit.hash === headHash
@@ -124,55 +137,61 @@ export function computeMetroLayout(
       hasTag
     })
 
-    // Remember the first row a lane is used on, and the most descriptive local-branch name.
+    // Track first appearance of each lane (smallest row index = newest commit on that lane)
     if (!laneFirstRow.has(lane)) {
       laneFirstRow.set(lane, i)
       const localRef = stationRefs.find((r) => r.fullName.startsWith('refs/heads/'))
-      if (localRef) laneFirstBranch.set(lane, localRef.name)
-    } else if (!laneFirstBranch.has(lane)) {
-      // If we didn't capture a name on first row, try again later
+      if (localRef) laneBranchName.set(lane, localRef.name)
+    } else if (!laneBranchName.has(lane)) {
       const localRef = stationRefs.find((r) => r.fullName.startsWith('refs/heads/'))
-      if (localRef) laneFirstBranch.set(lane, localRef.name)
+      if (localRef) laneBranchName.set(lane, localRef.name)
     }
 
-    // Also track parent lanes that diverge — they may be the first appearance of a new lane.
     for (let pi = 0; pi < parentLanes.length; pi++) {
       const pl = parentLanes[pi]
-      if (pl >= 0 && !laneFirstRow.has(pl)) {
-        laneFirstRow.set(pl, i)
-      }
+      if (pl >= 0 && !laneFirstRow.has(pl)) laneFirstRow.set(pl, i)
     }
   }
 
-  // Build lane labels (one per lane with a known branch name)
+  // Compute laneCount from highest lane index that actually has a station / live lane.
+  let laneCount = 0
+  for (const row of laneLayout.rows) {
+    if (row.lane + 1 > laneCount) laneCount = row.lane + 1
+    for (let l = 0; l < row.liveLanes.length; l++) {
+      if (row.liveLanes[l] !== null && l + 1 > laneCount) laneCount = l + 1
+    }
+  }
+  if (laneCount === 0) laneCount = 1
+
   const laneLabels: MetroLaneLabel[] = []
-  const laneFirstY = new Map<number, number>()
-  for (const [lane, rowIdx] of laneFirstRow.entries()) {
-    laneFirstY.set(lane, cy(rowIdx))
-    const name = laneFirstBranch.get(lane)
+  for (const [lane] of laneFirstRow.entries()) {
+    const name = laneBranchName.get(lane)
     if (!name) continue
     laneLabels.push({
       lane,
       name,
       color: laneColor(lane),
-      x: cx(lane),
-      y: Math.max(topPad - 18, 6)
+      y: ly(lane)
     })
   }
+  laneLabels.sort((a, b) => a.lane - b.lane)
 
-  const width = leftPad + Math.max(1, laneLayout.width) * laneWidth + leftPad
-  const height = topPad + laneLayout.rows.length * rowHeight + bottomPad
+  const width = leftPad + cols * colWidth + rightPad
+  const height = topPad + laneCount * laneHeight + bottomPad
 
   return {
     rows: laneLayout.rows,
     stations,
     laneLabels,
-    laneFirstY,
-    rowHeight,
-    laneWidth,
+    laneCount,
+    colWidth,
+    laneHeight,
     leftPad,
+    rightPad,
     topPad,
+    bottomPad,
     width,
-    height
+    height,
+    cols
   }
 }

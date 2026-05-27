@@ -152,6 +152,8 @@ async function main() {
     console.log(`✓ Metro layout computed`)
     console.log(`  stations:   ${layout.stations.length}`)
     console.log(`  lane labels:${layout.laneLabels.length}`)
+    console.log(`  cols:       ${layout.cols}`)
+    console.log(`  lanes:      ${layout.laneCount}`)
     console.log(`  width:      ${layout.width}px`)
     console.log(`  height:     ${layout.height}px`)
 
@@ -164,6 +166,11 @@ async function main() {
       `  merge:      ${interchange ? interchange.shortHash + ' "' + interchange.subject + '"' : '— none —'}`
     )
 
+    const newest = layout.stations.find((s) => s.row === 0)
+    const oldest = layout.stations.find((s) => s.row === layout.cols - 1)
+    console.log(`  newest x:   ${newest ? newest.x.toFixed(1) : '?'} (should be largest)`)
+    console.log(`  oldest x:   ${oldest ? oldest.x.toFixed(1) : '?'} (should be smallest)`)
+
     const errors = []
     if (layout.stations.length !== graph.length)
       errors.push(`station count mismatch (got ${layout.stations.length}, want ${graph.length})`)
@@ -172,6 +179,10 @@ async function main() {
     if (!interchange) errors.push('expected an interchange station for the merge commit')
     if (layout.laneLabels.length < 2)
       errors.push(`expected ≥2 lane labels (got ${layout.laneLabels.length})`)
+    if (newest && oldest && newest.x <= oldest.x)
+      errors.push(
+        `horizontal direction wrong: newest x=${newest.x} should be > oldest x=${oldest.x}`
+      )
 
     if (errors.length) {
       console.error('\n✗ Smoke test failed:')
