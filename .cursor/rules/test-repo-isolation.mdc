@@ -1,0 +1,48 @@
+---
+description: Testing must use ephemeral git repos created on the fly — never real user repos
+alwaysApply: true
+---
+
+# Test Repo Isolation
+
+**NEVER** run tests, smoke tests, or any validation scripts against a real repository (e.g. anything under `~/youidev/`, `~/Desktop/<project>/`, or any repo the user has open).
+
+## Always Do This
+
+Create a throwaway repo in `/tmp` using `mkdtempSync` or a shell `mktemp -d`, seed it with commits, then delete it on exit:
+
+```ts
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { execSync } from 'node:child_process'
+
+function makeTestRepo(): string {
+  const dir = mkdtempSync(`${tmpdir()}/simplegit-test-`)
+  const git = (cmd: string) =>
+    execSync(`git ${cmd}`, { cwd: dir, stdio: 'pipe' })
+  git('init -q')
+  git('config user.email "test@simplegit.dev"')
+  git('config user.name "Test User"')
+  git('config commit.gpgsign false')   // required — system may have GPG signing on
+  // ... seed commits, tags, branches as needed
+  return dir
+}
+
+const REPO = makeTestRepo()
+process.on('exit', () => rmSync(REPO, { recursive: true }))
+```
+
+## Never Do This
+
+```ts
+// ❌ Using the project root (not a git repo anyway)
+const REPO = process.cwd()
+
+// ❌ Using any path from the user's real work
+const REPO = '/Users/chris.ziraldo/youidev/some-project'
+const REPO = `${os.homedir()}/Desktop/SomeApp`
+```
+
+## GPG Note
+
+The user's git is configured to GPG-sign commits. Always set `commit.gpgsign false` in any test repo, otherwise commits will fail with `gpg: signing failed`.
