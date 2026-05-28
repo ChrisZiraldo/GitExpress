@@ -6,16 +6,22 @@ import type {
   Commit,
   CommitDetail,
   CommitInput,
+  CommitChecksInfo,
   DiffOptions,
   FileChangeType,
+  GeneratedCommitMessage,
   GraphCommit,
   PullOptions,
+  PullRequestInfo,
   PushOptions,
   RecentRepo,
   RefSet,
   Result,
+  SettingsUpdate,
+  SettingsView,
   Stash,
   StashFileEntry,
+  PrListItem,
   StashPushOptions,
   StatusResult
 } from '@shared/types'
@@ -50,6 +56,14 @@ const api = {
       changeType: FileChangeType
     ): Promise<Result<true>> =>
       ipcRenderer.invoke(Channels.FileDiscard, cwd, path, staged, changeType)
+  },
+  hunk: {
+    stage: (cwd: string, patch: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.HunkStage, cwd, patch),
+    unstage: (cwd: string, patch: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.HunkUnstage, cwd, patch),
+    discard: (cwd: string, patch: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.HunkDiscard, cwd, patch)
   },
   commit: {
     create: (cwd: string, input: CommitInput): Promise<Result<true>> =>
@@ -144,7 +158,34 @@ const api = {
     openPath: (fullPath: string): Promise<void> =>
       ipcRenderer.invoke(Channels.ShellOpenPath, fullPath),
     revealInFolder: (fullPath: string): Promise<void> =>
-      ipcRenderer.invoke(Channels.ShellRevealInFolder, fullPath)
+      ipcRenderer.invoke(Channels.ShellRevealInFolder, fullPath),
+    openExternal: (url: string): Promise<void> =>
+      ipcRenderer.invoke(Channels.ShellOpenExternal, url)
+  },
+  pr: {
+    list: (cwd: string): Promise<Result<PrListItem[]>> =>
+      ipcRenderer.invoke(Channels.PrList, cwd),
+    rerunRun: (cwd: string, runId: string, failedOnly: boolean): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.PrRerunRun, cwd, runId, failedOnly),
+    rerunLatest: (cwd: string, failedOnly: boolean): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.PrRerunLatest, cwd, failedOnly)
+  },
+  ci: {
+    available: (): Promise<Result<boolean>> =>
+      ipcRenderer.invoke(Channels.CiAvailable),
+    prStatus: (cwd: string, branch: string): Promise<Result<PullRequestInfo | null>> =>
+      ipcRenderer.invoke(Channels.CiPrStatus, cwd, branch),
+    commitChecks: (cwd: string, sha: string): Promise<Result<CommitChecksInfo | null>> =>
+      ipcRenderer.invoke(Channels.CiCommitChecks, cwd, sha)
+  },
+  settings: {
+    get: (): Promise<Result<SettingsView>> => ipcRenderer.invoke(Channels.SettingsGet),
+    update: (update: SettingsUpdate): Promise<Result<SettingsView>> =>
+      ipcRenderer.invoke(Channels.SettingsUpdate, update)
+  },
+  ai: {
+    generateCommitMessage: (cwd: string): Promise<Result<GeneratedCommitMessage>> =>
+      ipcRenderer.invoke(Channels.AiGenerateCommitMessage, cwd)
   },
   appWindow: {
     resize: (width: number, height: number): Promise<void> =>

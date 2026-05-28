@@ -230,6 +230,180 @@ async function main() {
     if (choreLane !== undefined && mainLane !== undefined && choreLane <= mainLane)
       errors.push(`chore/deps lane ${choreLane} should be BELOW main lane ${mainLane}`)
 
+    // ── Filter assertions ──────────────────────────────────────────────────
+    // Seeded repo: feature/auth, feature/dash, hotfix/payment, chore/deps —
+    // none have upstreams, so all are "stale". feature/dash was merged into
+    // main via merge --no-ff, so it's both stale AND merged.
+    if (layout.hiddenLocalNames.size !== 0)
+      errors.push(`default opts should hide nothing (got ${layout.hiddenLocalNames.size})`)
+
+    const noStale = layoutMod.computeMetroLayout(graph, refs, 'main', {
+      showStale: false
+    })
+    const noStaleHidden = [...noStale.hiddenLocalNames]
+    console.log(`\n  showStale=false → hidden: ${noStaleHidden.join(', ') || '— none —'}`)
+    for (const expected of ['feature/auth', 'hotfix/payment', 'chore/deps']) {
+      if (!noStale.hiddenLocalNames.has(expected))
+        errors.push(`showStale=false: expected to hide ${expected}`)
+    }
+    if (noStale.hiddenLocalNames.has('main'))
+      errors.push('showStale=false: must NOT hide the trunk (main)')
+    // Stations for hidden branches' unique commits should also be gone.
+    const noStaleHashes = new Set(noStale.stations.map((s) => s.hash))
+    if (noStaleHashes.size >= layout.stations.length)
+      errors.push(
+        `showStale=false: station count should drop (got ${noStaleHashes.size}, full ${layout.stations.length})`
+      )
+
+    const noMerged = layoutMod.computeMetroLayout(graph, refs, 'main', {
+      showMerged: false
+    })
+    console.log(
+      `  showMerged=false → hidden: ${[...noMerged.hiddenLocalNames].join(', ') || '— none —'}`
+    )
+    if (!noMerged.hiddenLocalNames.has('feature/dash'))
+      errors.push('showMerged=false: expected to hide feature/dash (was merged into main)')
+    if (noMerged.hiddenLocalNames.has('feature/auth'))
+      errors.push('showMerged=false: must NOT hide feature/auth (never merged)')
+
+    const both = layoutMod.computeMetroLayout(graph, refs, 'main', {
+      showMerged: false,
+      showStale: false
+    })
+    console.log(
+      `  both off       → hidden: ${[...both.hiddenLocalNames].join(', ') || '— none —'}`
+    )
+    if (both.hiddenLocalNames.size < 4)
+      errors.push(
+        `both off: expected to hide ≥4 branches (got ${both.hiddenLocalNames.size})`
+      )
+
+    // Author filter: every commit in the seeded repo is by smoke@gitmetro.dev,
+    // so filtering by that email should match all and filtering by anything
+    // else should hide every non-trunk/non-current branch.
+    const knownAuthor = layoutMod.computeMetroLayout(graph, refs, 'main', {
+      author: 'smoke@gitmetro.dev'
+    })
+    if (knownAuthor.hiddenLocalNames.size !== 0)
+      errors.push(
+        `author=smoke@... should match all (got hidden=${[...knownAuthor.hiddenLocalNames].join(', ')})`
+      )
+    const wrongAuthor = layoutMod.computeMetroLayout(graph, refs, 'main', {
+      author: 'someone-else@example.com'
+    })
+    console.log(
+      `  author=other → hidden: ${[...wrongAuthor.hiddenLocalNames].join(', ') || '— none —'}`
+    )
+    if (wrongAuthor.hiddenLocalNames.has('main'))
+      errors.push('author filter must NOT hide trunk (main)')
+    if (wrongAuthor.hiddenLocalNames.size < 3)
+      errors.push(
+        `author=wrong: expected ≥3 branches hidden (got ${wrongAuthor.hiddenLocalNames.size})`
+      )
+
+    // Date filter: cutoff in the future hides everything; cutoff far in
+    // the past keeps everything.
+    const futureCutoff = layoutMod.computeMetroLayout(graph, refs, 'main', {
+      dateCutoffMs: Date.now() + 24 * 60 * 60 * 1000
+    })
+    if (futureCutoff.hiddenLocalNames.size < 3)
+      errors.push(
+        `dateCutoff=future: expected ≥3 hidden (got ${futureCutoff.hiddenLocalNames.size})`
+      )
+    const pastCutoff = layoutMod.computeMetroLayout(graph, refs, 'main', {
+      dateCutoffMs: 0
+    })
+    if (pastCutoff.hiddenLocalNames.size !== 0)
+      errors.push(
+        `dateCutoff=0: should hide nothing (got ${[...pastCutoff.hiddenLocalNames].join(', ')})`
+      )
+
+    // CI filter: build a synthetic ciByHash where feature/auth=passing,
+    // hotfix/payment=failing, and the rest are intentionally missing
+    // (which means "still loading" → kept on the map).
+    const featAuth = refs.local.find((r) => r.name === 'feature/auth')
+    const hotfix = refs.local.find((r) => r.name === 'hotfix/payment')
+    const ciByHash = new Map()
+    if (featAuth) ciByHash.set(featAuth.hash, 'success')
+    if (hotfix) ciByHash.set(hotfix.hash, 'failure')
+    const onlyFailing = layoutMod.computeMetroLayout(graph, refs, 'main', {
+      ciFilter: 'failing',
+      ciByHash
+    })
+    console.log(
+      `  ci=failing   → hidden: ${[...onlyFailing.hiddenLocalNames].join(', ') || '— none —'}`
+    )
+    // feature/auth has known passing CI → must be hidden when filter=failing
+    if (!onlyFailing.hiddenLocalNames.has('feature/auth'))
+      errors.push('ci=failing: expected feature/auth (passing) to be hidden')
+    // hotfix/payment has known failing CI → must NOT be hidden
+    if (onlyFailing.hiddenLocalNames.has('hotfix/payment'))
+      errors.push('ci=failing: hotfix/payment (failing) should be visible')
+    // chore/deps has no entry → "loading" → kept visible
+    if (onlyFailing.hiddenLocalNames.has('chore/deps'))
+      errors.push('ci=failing: branches with unknown CI must NOT be hidden')
+
+    // ── New layout fields (mockup-audit pass) ─────────────────────────────
+    // The merge interchange should expose `mergeFromLane` so the renderer
+    // can fill the dot in the merging branch's color.
+    const mergeStation = layout.stations.find((s) =>
+      s.subject.startsWith('merge feature/dash')
+    )
+    if (!mergeStation) {
+      errors.push('expected a station for "merge feature/dash"')
+    } else {
+      // Note: in this seeded repo the merge IS the HEAD, so kind priority
+      // gives us 'head'. mergeFromLane should still be populated for the
+      // renderer regardless of kind.
+      if (!['interchange', 'head'].includes(mergeStation.kind))
+        errors.push(
+          `merge station kind should be 'interchange' or 'head' (got '${mergeStation.kind}')`
+        )
+      if (mergeStation.mergeFromLane === null || mergeStation.mergeFromLane === undefined)
+        errors.push(`merge station should expose mergeFromLane (got ${mergeStation.mergeFromLane})`)
+      else if (mergeStation.mergeFromLane === mergeStation.lane)
+        errors.push(
+          `mergeFromLane (${mergeStation.mergeFromLane}) should differ from station lane (${mergeStation.lane})`
+        )
+    }
+
+    // Non-merge commits should have mergeFromLane === null.
+    const initStation = layout.stations.find((s) => s.subject === 'init')
+    if (initStation && initStation.mergeFromLane !== null)
+      errors.push(
+        `non-merge commit "init" should have mergeFromLane=null (got ${initStation.mergeFromLane})`
+      )
+
+    // Each stale lane should have exactly ONE abandoned-tip station.
+    const noStaleOpts = layoutMod.computeMetroLayout(graph, refs, 'main')
+    const tipsByLane = new Map()
+    for (const s of noStaleOpts.stations) {
+      if (!s.isAbandonedTip) continue
+      tipsByLane.set(s.lane, (tipsByLane.get(s.lane) ?? 0) + 1)
+    }
+    console.log(
+      `  abandoned-tip stations per stale lane: ${
+        [...tipsByLane.entries()].map(([l, n]) => `lane ${l}=${n}`).join(', ') ||
+        '— none —'
+      }`
+    )
+    for (const lane of noStaleOpts.staleLanes) {
+      if (tipsByLane.get(lane) !== 1)
+        errors.push(
+          `stale lane ${lane} should have exactly 1 abandoned-tip station (got ${tipsByLane.get(lane) ?? 0})`
+        )
+    }
+    // Non-stale lanes should never have an abandoned-tip station.
+    for (const [lane, count] of tipsByLane) {
+      if (!noStaleOpts.staleLanes.has(lane))
+        errors.push(`lane ${lane} is not stale but has ${count} abandoned-tip stations`)
+    }
+
+    // Every station should have a non-empty `date` field (used by StartMarker).
+    const missingDate = layout.stations.find((s) => !s.date || typeof s.date !== 'string')
+    if (missingDate)
+      errors.push(`station ${missingDate.shortHash} missing date (got ${missingDate.date})`)
+
     if (errors.length) {
       console.error('\n✗ Smoke test failed:')
       for (const e of errors) console.error(`  - ${e}`)

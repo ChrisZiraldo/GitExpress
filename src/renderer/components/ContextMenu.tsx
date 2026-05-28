@@ -32,8 +32,8 @@ export function ContextMenu({ x, y, items, onClose }: Props): JSX.Element {
 
   useEffect(() => {
     const onDocDown = (e: MouseEvent): void => {
-      // Only close on left-click outside; right-click is handled by stopPropagation in openers
-      if (e.button === 0) onClose()
+      if (ref.current?.contains(e.target as Node)) return
+      onClose()
     }
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') onClose()
@@ -52,7 +52,6 @@ export function ContextMenu({ x, y, items, onClose }: Props): JSX.Element {
     <div
       ref={ref}
       role="menu"
-      onMouseDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => {
         e.preventDefault()
         e.stopPropagation()

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useRepo } from './store/useRepo'
 import { useGitStatus } from './hooks/useGitStatus'
+import { useCiStatus } from './hooks/useCiStatus'
 import { RefsSidebar } from './components/RefsSidebar'
 import { Toast } from './components/Toast'
 import { EmptyState } from './components/EmptyState'
@@ -10,6 +11,7 @@ import { DiffViewer } from './components/DiffViewer'
 import { TopBar } from './components/TopBar'
 import { MetroMap } from './components/metro/MetroMap'
 import { StationDetailsPanel } from './components/StationDetailsPanel'
+import { PullRequestsView } from './components/PullRequestsView'
 
 export function App(): JSX.Element {
   const activeRepo = useRepo((s) => s.activeRepo)
@@ -24,6 +26,7 @@ export function App(): JSX.Element {
   const setStashView = useRepo((s) => s.setStashView)
   const metroViewTab = useRepo((s) => s.metroViewTab)
   useGitStatus()
+  useCiStatus()
 
   const [dryRun, setDryRun] = useState<{ active: boolean; logPath: string } | null>(null)
   useEffect(() => {
@@ -106,6 +109,8 @@ export function App(): JSX.Element {
             <div className="flex-1 min-w-0 flex flex-col relative overflow-hidden">
               {metroViewTab === 'history' ? (
                 <MetroMap />
+              ) : metroViewTab === 'prs' ? (
+                <PullRequestsView />
               ) : (
                 <TabPlaceholder tab={metroViewTab} />
               )}
@@ -139,17 +144,13 @@ export function App(): JSX.Element {
 
 function TabPlaceholder({ tab }: { tab: string }): JSX.Element {
   const titles: Record<string, { title: string; body: string }> = {
-    flow: {
-      title: 'Flow view',
-      body: 'Visualize PR throughput and review velocity. Coming soon.'
+    insights: {
+      title: 'Insights',
+      body: 'CI failure heatmap, stale branches, and risk signals. Coming soon.'
     },
-    risk: {
-      title: 'Risk view',
-      body: 'Highlight CI failures, conflicts, and stale lines. Coming soon.'
-    },
-    ownership: {
-      title: 'Ownership view',
-      body: 'Color the map by code owner. Coming soon.'
+    authors: {
+      title: 'Authors',
+      body: 'Colorize the map by commit author. Coming soon.'
     }
   }
   const info = titles[tab] ?? { title: tab, body: 'Coming soon.' }

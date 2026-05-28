@@ -2,8 +2,10 @@ import { create } from 'zustand'
 import type {
   Branch,
   Commit,
+  CommitChecksInfo,
   CommitDetail,
   GraphCommit,
+  PullRequestInfo,
   RecentRepo,
   RefSet,
   Stash,
@@ -23,11 +25,23 @@ export interface ToastEntry {
 
 const EMPTY_REFS: RefSet = { local: [], remote: [], tags: [] }
 
-export type MetroViewTab = 'history' | 'flow' | 'risk' | 'ownership'
+export type MetroViewTab = 'history' | 'prs' | 'insights' | 'authors'
+
+/** What the user wants to keep when they pick a CI status filter.
+ * `all` is the default no-op. The other values map onto `CheckRollupState`
+ * with `none` covering "no PR / no checks at all". */
+export type CiFilter = 'all' | 'passing' | 'failing' | 'pending' | 'none'
+
+/** Calendar window (relative to "now") for filtering branches by tip date. */
+export type DateRangeFilter = 'all' | '7d' | '30d' | '90d'
 
 export interface MetroFilters {
   showMerged: boolean
   showStale: boolean
+  ciStatus: CiFilter
+  /** Lowercased author email; null means "all authors". */
+  author: string | null
+  dateRange: DateRangeFilter
 }
 
 interface RepoState {
@@ -52,9 +66,16 @@ interface RepoState {
   toasts: ToastEntry[]
   // Metro UI state
   metroViewTab: MetroViewTab
-  searchQuery: string
   highlightedBranchId: string | null
   metroFilters: MetroFilters
+  // CI / PR status — keyed by branch name. `undefined` = not fetched yet,
+  // `null` = fetched and there is no PR for this branch.
+  ciByBranch: Record<string, PullRequestInfo | null>
+  ciLoading: Record<string, boolean>
+  /** Per-commit CI data keyed by full SHA. */
+  ciByCommit: Record<string, CommitChecksInfo | null>
+  ciCommitLoading: Record<string, boolean>
+  ciAvailable: boolean | null
   setActiveRepo: (repo: RecentRepo | null) => void
   setRecents: (recents: RecentRepo[]) => void
   setStatus: (status: StatusResult | null) => void
@@ -73,9 +94,14 @@ interface RepoState {
   setBusy: (busy: boolean) => void
   setDrawerHeight: (h: number) => void
   setMetroViewTab: (tab: MetroViewTab) => void
-  setSearchQuery: (q: string) => void
   setHighlightedBranchId: (id: string | null) => void
   setMetroFilters: (patch: Partial<MetroFilters>) => void
+  setCiForBranch: (branch: string, info: PullRequestInfo | null) => void
+  setCiLoading: (branch: string, loading: boolean) => void
+  setCiForCommit: (sha: string, info: CommitChecksInfo | null) => void
+  setCiCommitLoading: (sha: string, loading: boolean) => void
+  setCiAvailable: (available: boolean) => void
+  clearCi: () => void
   refreshSignal: () => void
   pushToast: (kind: ToastEntry['kind'], text: string) => void
   dismissToast: (id: number) => void
@@ -149,9 +175,19 @@ export const useRepo = create<RepoState>((set) => ({
   refreshVersion: 0,
   toasts: [],
   metroViewTab: 'history',
-  searchQuery: '',
   highlightedBranchId: null,
-  metroFilters: { showMerged: true, showStale: false },
+  metroFilters: {
+    showMerged: true,
+    showStale: false,
+    ciStatus: 'all',
+    author: null,
+    dateRange: 'all'
+  },
+  ciByBranch: {},
+  ciLoading: {},
+  ciByCommit: {},
+  ciCommitLoading: {},
+  ciAvailable: null,
   setActiveRepo: (repo) =>
     set({
       activeRepo: repo,
@@ -166,7 +202,11 @@ export const useRepo = create<RepoState>((set) => ({
       selectedCommit: null,
       commitDetail: null,
       selectedCommitFile: null,
-      diff: ''
+      diff: '',
+      ciByBranch: {},
+      ciLoading: {},
+      ciByCommit: {},
+      ciCommitLoading: {}
     }),
   setRecents: (recents) => set({ recents }),
   setStatus: (status) => set({ status }),
@@ -197,10 +237,39 @@ export const useRepo = create<RepoState>((set) => ({
     set({ drawerHeight: h })
   },
   setMetroViewTab: (tab) => set({ metroViewTab: tab }),
-  setSearchQuery: (q) => set({ searchQuery: q }),
   setHighlightedBranchId: (id) => set({ highlightedBranchId: id }),
   setMetroFilters: (patch) =>
     set((state) => ({ metroFilters: { ...state.metroFilters, ...patch } })),
+  setCiForBranch: (branch, info) =>
+    set((state) => ({
+      ciByBranch: { ...state.ciByBranch, [branch]: info }
+    })),
+  setCiLoading: (branch, loading) =>
+    set((state) => {
+      const next = { ...state.ciLoading }
+      if (loading) next[branch] = true
+      else delete next[branch]
+      return { ciLoading: next }
+    }),
+  setCiForCommit: (sha, info) =>
+    set((state) => ({
+      ciByCommit: { ...state.ciByCommit, [sha]: info }
+    })),
+  setCiCommitLoading: (sha, loading) =>
+    set((state) => {
+      const next = { ...state.ciCommitLoading }
+      if (loading) next[sha] = true
+      else delete next[sha]
+      return { ciCommitLoading: next }
+    }),
+  setCiAvailable: (available) => set({ ciAvailable: available }),
+  clearCi: () =>
+    set({
+      ciByBranch: {},
+      ciLoading: {},
+      ciByCommit: {},
+      ciCommitLoading: {}
+    }),
   refreshSignal: () =>
     set((state) => ({ refreshVersion: state.refreshVersion + 1 })),
   pushToast: (kind, text) =>

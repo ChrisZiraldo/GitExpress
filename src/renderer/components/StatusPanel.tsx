@@ -163,34 +163,6 @@ export function StatusPanel({ onRefresh }: Props): JSX.Element {
       )}
 
       <Section
-        title={`Staged (${stagedAll.length})`}
-        actionLabel={stagedAll.length > 0 ? 'Unstage all' : undefined}
-        onAction={
-          stagedAll.length > 0
-            ? () => unstage(stagedAll.map((f) => f.path))
-            : undefined
-        }
-      >
-        {stagedAll.length === 0 ? (
-          <Empty text="No staged changes" />
-        ) : (
-          stagedAll.map((f) => (
-            <FileRow
-              key={`s-${f.path}`}
-              entry={f}
-              selected={isSelected(f.path, true)}
-              onClick={() => select(f.path, true)}
-              actionLabel="Unstage"
-              onAction={() => unstage([f.path])}
-              confirming={pendingDiscard === discardKey(f.path, true)}
-              onDiscard={() => discard(f.path, true, f.changeType)}
-              onContextMenu={(e) => openFileContextMenu(e, f)}
-            />
-          ))
-        )}
-      </Section>
-
-      <Section
         title={`Changes (${unstagedAll.length})`}
         actionLabel={unstagedAll.length > 0 ? 'Stage all' : undefined}
         onAction={
@@ -212,6 +184,34 @@ export function StatusPanel({ onRefresh }: Props): JSX.Element {
               onAction={() => stage([f.path])}
               confirming={pendingDiscard === discardKey(f.path, false)}
               onDiscard={() => discard(f.path, false, f.changeType)}
+              onContextMenu={(e) => openFileContextMenu(e, f)}
+            />
+          ))
+        )}
+      </Section>
+
+      <Section
+        title={`Staged (${stagedAll.length})`}
+        actionLabel={stagedAll.length > 0 ? 'Unstage all' : undefined}
+        onAction={
+          stagedAll.length > 0
+            ? () => unstage(stagedAll.map((f) => f.path))
+            : undefined
+        }
+      >
+        {stagedAll.length === 0 ? (
+          <Empty text="No staged changes" />
+        ) : (
+          stagedAll.map((f) => (
+            <FileRow
+              key={`s-${f.path}`}
+              entry={f}
+              selected={isSelected(f.path, true)}
+              onClick={() => select(f.path, true)}
+              actionLabel="Unstage"
+              onAction={() => unstage([f.path])}
+              confirming={pendingDiscard === discardKey(f.path, true)}
+              onDiscard={() => discard(f.path, true, f.changeType)}
               onContextMenu={(e) => openFileContextMenu(e, f)}
             />
           ))

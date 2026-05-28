@@ -2,7 +2,8 @@ import { useMemo } from 'react'
 import { Folder, TramFront } from 'lucide-react'
 import { useRepo } from '../store/useRepo'
 import { computeMetroLayout } from './metro/computeMetroLayout'
-import { laneColor } from './metro/colors'
+import { laneColor, laneCasing } from './metro/colors'
+import { branchOffPath } from './metro/paths'
 import { MOCK_GRAPH, MOCK_REFS } from '../data/gitMetroMock'
 
 export function EmptyState(): JSX.Element {
@@ -45,7 +46,7 @@ export function EmptyState(): JSX.Element {
             <span>All aboard</span>
           </div>
           <h1 className="text-3xl font-bold leading-tight text-text">
-            Git Metro
+            Git Express
           </h1>
           <p className="text-sm text-accent font-medium mt-1">Read your repo like a subway map</p>
           <p className="text-sm text-muted mt-3">
@@ -88,20 +89,32 @@ export function EmptyState(): JSX.Element {
                 if (live === null) return null
                 const y = layout.topPad + l * layout.laneHeight + layout.laneHeight / 2
                 return (
-                  <line
-                    key={`mock-${row.commit.hash}-${l}`}
-                    x1={Math.min(x1, x2)}
-                    x2={Math.max(x1, x2)}
-                    y1={y}
-                    y2={y}
-                    stroke={laneColor(l)}
-                    strokeWidth={3}
-                    strokeLinecap="round"
-                  />
+                  <g key={`mock-${row.commit.hash}-${l}`}>
+                    <line
+                      x1={Math.min(x1, x2)}
+                      x2={Math.max(x1, x2)}
+                      y1={y}
+                      y2={y}
+                      stroke={laneCasing(laneColor(l))}
+                      strokeWidth={6}
+                      strokeLinecap="round"
+                      opacity={0.85}
+                    />
+                    <line
+                      x1={Math.min(x1, x2)}
+                      x2={Math.max(x1, x2)}
+                      y1={y}
+                      y2={y}
+                      stroke={laneColor(l)}
+                      strokeWidth={4}
+                      strokeLinecap="round"
+                    />
+                  </g>
                 )
               })
             })}
-            {/* Cross-lane curves for parents */}
+            {/* Cross-lane splines for parents — same Tube-style geometry as the
+                main map, with a darker casing underneath each colored stroke. */}
             {layout.rows.flatMap((row, i) => {
               const elements: JSX.Element[] = []
               const x1 = layout.leftPad + (layout.cols - 1 - i) * layout.colWidth + layout.colWidth / 2
@@ -113,15 +126,28 @@ export function EmptyState(): JSX.Element {
                 if (parentRow === -1) return
                 const x2 = layout.leftPad + (layout.cols - 1 - parentRow) * layout.colWidth + layout.colWidth / 2
                 const y2 = layout.topPad + pl * layout.laneHeight + layout.laneHeight / 2
-                const midX = (x1 + x2) / 2
+                const d = branchOffPath(x1, y1, x2, y2, layout.laneHeight, layout.colWidth)
+                elements.push(
+                  <path
+                    key={`mockc-casing-${row.commit.hash}-${pi}`}
+                    d={d}
+                    fill="none"
+                    stroke={laneCasing(laneColor(pl))}
+                    strokeWidth={6}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    opacity={0.85}
+                  />
+                )
                 elements.push(
                   <path
                     key={`mockc-${row.commit.hash}-${pi}`}
-                    d={`M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`}
+                    d={d}
                     fill="none"
                     stroke={laneColor(pl)}
-                    strokeWidth={3}
+                    strokeWidth={4}
                     strokeLinecap="round"
+                    strokeLinejoin="round"
                   />
                 )
               })
@@ -130,8 +156,17 @@ export function EmptyState(): JSX.Element {
             {/* Stations */}
             {layout.stations.map((s) => (
               <g key={s.hash}>
-                <circle cx={s.x} cy={s.y} r={6} fill="#0b0e14" stroke={s.color} strokeWidth={2.5} />
-                {s.isHead && <circle cx={s.x} cy={s.y} r={2.5} fill={s.color} />}
+                <line
+                  x1={s.x}
+                  y1={s.y - 9}
+                  x2={s.x}
+                  y2={s.y + 9}
+                  stroke={s.color}
+                  strokeWidth={1.5}
+                  strokeOpacity={0.7}
+                />
+                <circle cx={s.x} cy={s.y} r={7} fill="#0b0e14" stroke={s.color} strokeWidth={3} />
+                {s.isHead && <circle cx={s.x} cy={s.y} r={3} fill={s.color} />}
               </g>
             ))}
             {/* HEAD label */}

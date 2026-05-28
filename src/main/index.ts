@@ -9,7 +9,7 @@ const isDev = !app.isPackaged
 function createWindow(): BrowserWindow {
   const bounds = getWindowBounds()
   const win = new BrowserWindow({
-    title: 'Git Metro',
+    title: 'Git Express',
     width: bounds.width,
     height: bounds.height,
     x: bounds.x,

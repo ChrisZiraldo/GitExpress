@@ -155,3 +155,95 @@ export interface CommitDetail {
   body: string
   files: CommitChangedFile[]
 }
+
+// ── CI / Pull-Request info (sourced from the `gh` CLI) ────────────────────
+
+export type CheckRollupState = 'none' | 'pending' | 'success' | 'failure'
+
+export interface CheckSummary {
+  name: string
+  state: CheckRollupState
+  url?: string
+  description?: string
+  /** "check" = GitHub Checks API; "status" = legacy commit status context. */
+  kind: 'check' | 'status'
+  /**
+   * GitHub Actions run ID extracted from the check's details URL.
+   * Only present for `kind === 'check'` entries backed by Actions runs.
+   * Used to call `gh run rerun`.
+   */
+  runId?: string
+}
+
+export interface PullRequestInfo {
+  number: number
+  state: 'OPEN' | 'CLOSED' | 'MERGED'
+  url: string
+  title: string
+  headRefName: string
+  baseRefName: string
+  isDraft: boolean
+  mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN'
+  checks: CheckSummary[]
+  /** Aggregated state across all checks (also `'none'` when no checks ran). */
+  rollup: CheckRollupState
+}
+
+/** Lightweight reference to a PR associated with a commit. */
+export interface CommitPullRequestRef {
+  number: number
+  url: string
+  title: string
+  state: 'OPEN' | 'CLOSED' | 'MERGED'
+}
+
+export interface CommitChecksInfo {
+  sha: string
+  checks: CheckSummary[]
+  rollup: CheckRollupState
+  /** Pull requests this commit appears in (head SHA, or via merge). */
+  pulls: CommitPullRequestRef[]
+}
+
+// ── App settings (persisted via electron-store, key encrypted via safeStorage)
+
+/**
+ * Public settings shape exposed to the renderer.  The API key itself is never
+ * returned in clear-text — only `cursorApiKeySet` (boolean) flags whether one
+ * has been stored.  Updates use {@link SettingsUpdate} which can carry the
+ * raw key value.
+ */
+export interface SettingsView {
+  cursorApiKeySet: boolean
+  commitMessageRules: string
+}
+
+export interface SettingsUpdate {
+  /**
+   * `string` to set/replace the key; `null` to clear it; `undefined` to leave
+   * the existing key untouched.
+   */
+  cursorApiKey?: string | null
+  commitMessageRules?: string
+}
+
+export interface GeneratedCommitMessage {
+  subject: string
+  body: string
+}
+
+export interface PrListItem {
+  number: number
+  title: string
+  state: 'OPEN' | 'CLOSED' | 'MERGED'
+  isDraft: boolean
+  headRefName: string
+  baseRefName: string
+  url: string
+  author: string
+  createdAt: string
+  updatedAt: string
+  rollup: CheckRollupState
+  mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN'
+  labels: string[]
+}

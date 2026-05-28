@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Search,
   ChevronDown,
   TramFront,
   Download,
@@ -16,12 +15,14 @@ import {
 } from 'lucide-react'
 import { useRepo, type MetroViewTab } from '../store/useRepo'
 import type { FileEntry } from '@shared/types'
+import { CiBadge } from './CiBadge'
+import { SettingsDialog } from './SettingsDialog'
 
 const TABS: { id: MetroViewTab; label: string }[] = [
   { id: 'history', label: 'History' },
-  { id: 'flow', label: 'Flow' },
-  { id: 'risk', label: 'Risk' },
-  { id: 'ownership', label: 'Ownership' }
+  { id: 'prs', label: 'Pull Requests' },
+  { id: 'insights', label: 'Insights' },
+  { id: 'authors', label: 'Authors' }
 ]
 
 // On macOS the window uses `titleBarStyle: 'hiddenInset'`, which places the
@@ -42,8 +43,6 @@ export function TopBar(): JSX.Element {
   const setRecents = useRepo((s) => s.setRecents)
   const pushToast = useRepo((s) => s.pushToast)
   const refreshSignal = useRepo((s) => s.refreshSignal)
-  const searchQuery = useRepo((s) => s.searchQuery)
-  const setSearchQuery = useRepo((s) => s.setSearchQuery)
   const metroViewTab = useRepo((s) => s.metroViewTab)
   const setMetroViewTab = useRepo((s) => s.setMetroViewTab)
   const highlightedBranchId = useRepo((s) => s.highlightedBranchId)
@@ -57,6 +56,7 @@ export function TopBar(): JSX.Element {
   const [stashMessage, setStashMessage] = useState('')
   const [stashSelected, setStashSelected] = useState<Set<string>>(new Set())
   const [confirmReset, setConfirmReset] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const branch = status?.branch
   const branchName = branch?.detached ? 'DETACHED' : branch?.current ?? '...'
@@ -205,7 +205,7 @@ export function TopBar(): JSX.Element {
 
   return (
     <div
-      className="titlebar-drag h-12 bg-bg-subtle border-b border-line flex items-center pr-3 gap-2 shrink-0"
+      className="titlebar-drag h-14 bg-bg-subtle border-b border-line flex items-center pr-3 gap-2 shrink-0"
       style={{ paddingLeft: TITLEBAR_LEADING_PAD + 12 }}
     >
       {/* Wordmark */}
@@ -213,108 +213,95 @@ export function TopBar(): JSX.Element {
         <div className="w-7 h-7 rounded-md bg-accent/15 border border-accent/40 flex items-center justify-center text-accent">
           <TramFront size={16} strokeWidth={2.25} />
         </div>
-        <span className="font-semibold text-base text-text">Git Metro</span>
+        <span className="font-semibold text-base text-text">Git Express</span>
       </div>
 
-      {/* Repo picker */}
-      <Popover
-        open={repoMenuOpen}
-        onOpenChange={setRepoMenuOpen}
-        trigger={
-          <button className="titlebar-nodrag px-2.5 py-1.5 rounded-md bg-bg-panel hover:bg-line text-sm flex items-center gap-2 max-w-[260px] shrink-0">
-            <span className="truncate font-medium">
-              {activeRepo ? activeRepo.name : 'Open repository…'}
-            </span>
-            <ChevronDown size={12} />
-          </button>
-        }
-        content={
-          <div className="w-72 max-h-80 overflow-y-auto">
-            <button
-              onClick={openPicker}
-              className="w-full text-left px-3 py-2 hover:bg-line text-sm border-b border-line"
-            >
-              Open repository…
+      {/* Repo picker + Branch filter — grouped together on the left */}
+      <div className="titlebar-nodrag flex items-center gap-1 shrink-0">
+        <Popover
+          open={repoMenuOpen}
+          onOpenChange={setRepoMenuOpen}
+          trigger={
+            <button className="px-2.5 py-1.5 rounded-md bg-bg-panel hover:bg-line text-sm flex items-center gap-2 max-w-[260px]">
+              <span className="truncate font-medium">
+                {activeRepo ? activeRepo.name : 'Open repository…'}
+              </span>
+              <ChevronDown size={12} />
             </button>
-            {recents.length === 0 ? (
-              <div className="px-3 py-2 text-xs text-muted">No recent repositories.</div>
-            ) : (
-              <>
-                <div className="px-3 pt-2 pb-1 text-xs uppercase tracking-wide text-muted">Recent</div>
-                {recents.map((r) => (
+          }
+          content={
+            <div className="w-72 max-h-80 overflow-y-auto">
+              <button
+                onClick={openPicker}
+                className="w-full text-left px-3 py-2 hover:bg-line text-sm border-b border-line"
+              >
+                Open repository…
+              </button>
+              {recents.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-muted">No recent repositories.</div>
+              ) : (
+                <>
+                  <div className="px-3 pt-2 pb-1 text-xs uppercase tracking-wide text-muted">Recent</div>
+                  {recents.map((r) => (
+                    <button
+                      key={r.path}
+                      onClick={() => openExisting(r.path)}
+                      className={
+                        'block w-full text-left px-3 py-1.5 hover:bg-line text-sm ' +
+                        (r.path === activeRepo?.path ? 'text-accent' : '')
+                      }
+                      title={r.path}
+                    >
+                      <div className="truncate font-medium">{r.name}</div>
+                      <div className="truncate text-xs text-muted">{r.path}</div>
+                    </button>
+                  ))}
+                </>
+              )}
+            </div>
+          }
+        />
+
+        <Popover
+          open={branchFilterOpen}
+          onOpenChange={setBranchFilterOpen}
+          trigger={
+            <button className="px-2.5 py-1.5 rounded-md bg-bg-panel hover:bg-line text-sm flex items-center gap-2">
+              <GitBranch size={13} className="text-muted" />
+              <span className="font-medium truncate max-w-[140px]">{selectedBranchLabel}</span>
+              <ChevronDown size={12} />
+            </button>
+          }
+          content={
+            <div className="w-56 max-h-80 overflow-y-auto py-1">
+              {allBranches.map((b) => {
+                const selected =
+                  b.fullName === (highlightedBranchId ?? 'ALL') ||
+                  (highlightedBranchId === null && b.fullName === 'ALL')
+                return (
                   <button
-                    key={r.path}
-                    onClick={() => openExisting(r.path)}
+                    key={b.fullName}
+                    onClick={() => {
+                      setHighlightedBranchId(b.fullName === 'ALL' ? null : b.fullName)
+                      setBranchFilterOpen(false)
+                    }}
                     className={
                       'block w-full text-left px-3 py-1.5 hover:bg-line text-sm ' +
-                      (r.path === activeRepo?.path ? 'text-accent' : '')
+                      (selected ? 'text-accent font-medium' : '')
                     }
-                    title={r.path}
                   >
-                    <div className="truncate font-medium">{r.name}</div>
-                    <div className="truncate text-xs text-muted">{r.path}</div>
+                    {b.name}
+                    {b.current && <span className="ml-2 text-xs text-muted">current</span>}
                   </button>
-                ))}
-              </>
-            )}
-          </div>
-        }
-      />
-
-      {/* Search */}
-      <div className="titlebar-nodrag relative flex-1 max-w-[440px]">
-        <Search
-          size={13}
-          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none"
+                )
+              })}
+            </div>
+          }
         />
-        <input
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search commits, branches, authors…"
-          className="w-full pl-8 pr-12 py-1.5 bg-bg-panel border border-line rounded-md text-sm focus:outline-none focus:border-accent placeholder:text-muted"
-        />
-        <kbd className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted bg-bg-subtle border border-line rounded px-1.5 py-0.5 font-mono">
-          ⌘K
-        </kbd>
       </div>
 
-      {/* Branch filter */}
-      <Popover
-        open={branchFilterOpen}
-        onOpenChange={setBranchFilterOpen}
-        trigger={
-          <button className="titlebar-nodrag px-2.5 py-1.5 rounded-md bg-bg-panel hover:bg-line text-sm flex items-center gap-2 shrink-0">
-            <GitBranch size={13} className="text-muted" />
-            <span className="font-medium truncate max-w-[140px]">{selectedBranchLabel}</span>
-            <ChevronDown size={12} />
-          </button>
-        }
-        content={
-          <div className="w-56 max-h-80 overflow-y-auto py-1">
-            {allBranches.map((b) => {
-              const selected =
-                b.fullName === (highlightedBranchId ?? 'ALL') ||
-                (highlightedBranchId === null && b.fullName === 'ALL')
-              return (
-                <button
-                  key={b.fullName}
-                  onClick={() => {
-                    setHighlightedBranchId(b.fullName === 'ALL' ? null : b.fullName)
-                    setBranchFilterOpen(false)
-                  }}
-                  className={
-                    'block w-full text-left px-3 py-1.5 hover:bg-line text-sm ' +
-                    (selected ? 'text-accent font-medium' : '')
-                  }
-                >
-                  {b.name}
-                  {b.current && <span className="ml-2 text-xs text-muted">current</span>}
-                </button>
-              )
-            })}
-          </div>
-        }
-      />
+      {/* Spacer */}
+      <div className="flex-1" />
 
       {/* View tabs */}
       <div className="titlebar-nodrag flex items-center rounded-md overflow-hidden border border-line text-xs shrink-0 ml-1">
@@ -337,7 +324,7 @@ export function TopBar(): JSX.Element {
         })}
       </div>
 
-      {/* Branch ahead/behind */}
+      {/* Branch ahead/behind + CI status for current branch's PR */}
       {activeRepo && branch && (
         <div className="flex items-center gap-1 text-xs shrink-0">
           {ahead > 0 && (
@@ -350,96 +337,103 @@ export function TopBar(): JSX.Element {
               ↓{behind}
             </span>
           )}
+          <CiBadge />
         </div>
       )}
 
-      {/* Right action buttons */}
-      <div className="ml-auto flex items-center gap-1 titlebar-nodrag shrink-0">
+      {/* Right action buttons — stacked label + icon, GitKraken-style */}
+      <div className="ml-auto flex items-stretch titlebar-nodrag shrink-0 h-full">
         {activeRepo && (
           <>
             {!onMain && (
-              <ToolIconButton
+              <ToolStackButton
                 onClick={switchToMain}
                 disabled={busy}
+                label="Main"
                 title="Switch to main / master"
-                icon={<Home size={14} />}
+                icon={<Home size={16} />}
               />
             )}
-            <ToolIconButton
+            <ToolStackButton
               onClick={fetchAll}
               disabled={busy}
+              label="Fetch"
               title="Fetch all remotes"
-              icon={<Download size={14} />}
+              icon={<Download size={16} />}
             />
-            <ToolIconButton
+            <ToolStackButton
               onClick={pull}
               disabled={busy}
+              label="Pull"
               title="Pull (fast-forward)"
-              icon={<ArrowDownToLine size={14} />}
+              icon={<ArrowDownToLine size={16} />}
             />
-            <ToolIconButton
+            <ToolStackButton
               onClick={push}
               disabled={busy}
+              label="Push"
               title="Push"
-              icon={<ArrowUpFromLine size={14} />}
+              icon={<ArrowUpFromLine size={16} />}
               primary
             />
             {branch?.upstream && (
-              <button
+              <ToolStackButton
                 onClick={resetToRemote}
                 disabled={busy}
+                label={confirmReset ? 'Confirm?' : 'Reset'}
                 title={
                   confirmReset
                     ? 'Click again to confirm — discards local commits!'
                     : `Hard reset to ${branch.upstream}`
                 }
-                className={
-                  'p-1.5 rounded-md disabled:opacity-40 flex items-center gap-1 ' +
-                  (confirmReset
-                    ? 'bg-danger text-white animate-pulse'
-                    : 'bg-bg-panel hover:bg-line text-warn')
-                }
-              >
-                <RotateCcw size={14} />
-                {confirmReset && <span className="text-xs font-medium pr-1">Confirm?</span>}
-              </button>
+                icon={<RotateCcw size={16} />}
+                warn={!confirmReset}
+                danger={confirmReset}
+              />
             )}
-            <Divider />
-            <ToolIconButton
+            <ToolDivider />
+            <ToolStackButton
               onClick={() => setNewBranchOpen(true)}
               disabled={busy}
+              label="Branch"
               title={`New branch from ${branchName}`}
-              icon={<GitBranch size={14} />}
+              icon={<GitBranch size={16} />}
             />
-            <ToolIconButton
+            <ToolStackButton
               onClick={() => openStashDialog()}
               disabled={busy || changedFiles.length === 0}
+              label="Stash"
               title="Stash changes"
-              icon={<Archive size={14} />}
+              icon={<Archive size={16} />}
             />
-            <ToolIconButton
+            <ToolStackButton
               onClick={popStash}
               disabled={busy || stashes.length === 0}
+              label="Pop"
               title="Pop most recent stash"
-              icon={<Layers size={14} />}
+              icon={<Layers size={16} />}
             />
-            <Divider />
+            <ToolDivider />
           </>
         )}
 
-        <ToolIconButton
+        <ToolStackButton
           onClick={() => {
             window.dispatchEvent(new CustomEvent('gitmetro:fit'))
           }}
-          title="Fit map"
-          icon={<Maximize2 size={14} />}
+          label="Fit"
+          title="Fit visible stations to screen"
+          icon={<Maximize2 size={16} />}
         />
-        <ToolIconButton
-          onClick={() => undefined}
+        <ToolStackButton
+          onClick={() => setSettingsOpen(true)}
+          label="Settings"
           title="Settings"
-          icon={<Settings size={14} />}
+          icon={<Settings size={16} />}
         />
       </div>
+
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
 
       {newBranchOpen && (
         <Modal title={`New branch from ${branchName}`} onClose={() => setNewBranchOpen(false)}>
@@ -491,37 +485,67 @@ export function TopBar(): JSX.Element {
   )
 }
 
-interface ToolIconButtonProps {
+interface ToolStackButtonProps {
   onClick: () => void | Promise<void>
   icon: JSX.Element
-  title: string
+  /** Short verb shown above the icon (e.g. "Pull", "Push"). Renders as
+   *  visible text — this is the primary affordance, not the icon. */
+  label: string
+  /** Optional longer tooltip; defaults to `label` when omitted. */
+  title?: string
   disabled?: boolean
+  /** Accent color (used for the primary CTA — Push). */
   primary?: boolean
+  /** Warn color (used for destructive-but-recoverable — Reset). */
+  warn?: boolean
+  /** Danger color with pulse (used for Reset's confirm state). */
+  danger?: boolean
 }
-function ToolIconButton({
+
+/**
+ * GitKraken / Tower-style toolbar button: small uppercase label stacked
+ * above an icon, full toolbar height, separated by thin vertical dividers.
+ * The label IS the affordance — the icon is supportive.
+ */
+function ToolStackButton({
   onClick,
   icon,
+  label,
   title,
   disabled,
-  primary
-}: ToolIconButtonProps): JSX.Element {
-  const cls = primary
-    ? 'bg-accent hover:bg-accent-hover text-white'
-    : 'bg-bg-panel hover:bg-line text-text'
+  primary,
+  warn,
+  danger
+}: ToolStackButtonProps): JSX.Element {
+  const tone = danger
+    ? 'text-white bg-danger animate-pulse hover:bg-danger'
+    : primary
+      ? 'text-accent hover:bg-accent/15'
+      : warn
+        ? 'text-warn hover:bg-warn/15'
+        : 'text-text hover:bg-line'
   return (
     <button
       onClick={() => void onClick()}
       disabled={disabled}
-      title={title}
-      className={'p-1.5 rounded-md disabled:opacity-40 ' + cls}
+      title={title ?? label}
+      className={
+        'h-full px-2.5 min-w-[52px] flex flex-col items-center justify-center gap-1 ' +
+        'rounded-md transition-colors disabled:opacity-30 disabled:cursor-not-allowed ' +
+        tone
+      }
     >
-      {icon}
+      <span className="text-[11px] leading-none font-medium tracking-wide">
+        {label}
+      </span>
+      <span className="leading-none">{icon}</span>
     </button>
   )
 }
 
-function Divider(): JSX.Element {
-  return <div className="w-px h-5 bg-line mx-0.5" />
+/** Full-height thin vertical separator between toolbar button groups. */
+function ToolDivider(): JSX.Element {
+  return <div className="w-px h-7 self-center bg-line/70 mx-1" />
 }
 
 interface PopoverProps {

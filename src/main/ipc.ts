@@ -9,11 +9,13 @@ import type {
   PushOptions,
   RecentRepo,
   Result,
+  SettingsUpdate,
   StashPushOptions
 } from '@shared/types'
 import { getStatus } from './git/status'
 import { getFileDiff } from './git/diff'
 import { stageAdd, stageReset } from './git/stage'
+import { discardHunk, stageHunk, unstageHunk } from './git/hunk'
 import { discardFile } from './git/restore'
 import { commitCreate, showCommit, showFileDiff } from './git/commit'
 import { remoteFetch, remotePull, remotePush } from './git/remotes'
@@ -42,9 +44,21 @@ import {
 import { resolveRepoRoot } from './git/repo'
 import { createTag, deleteTag } from './git/tag'
 import { cherryPick, revert, resetToCommit, type ResetMode } from './git/commit-ops'
+import { isGhAvailable } from './gh/runner'
+import { getChecksForCommit, getPullRequestForBranch, listPullRequests, rerunRun, rerunLatest } from './gh/pr'
 import { join } from 'node:path'
-import { getLastRepoPath, getRecents, pushRecent, removeRecent, saveLastRepoPath } from './store'
+import {
+  getLastRepoPath,
+  getRecents,
+  getSettingsView,
+  pushRecent,
+  removeRecent,
+  saveCommitMessageRules,
+  saveCursorApiKey,
+  saveLastRepoPath
+} from './store'
 import { buildAppMenu } from './menu'
+import { generateCommitMessage } from './ai/commitMessage'
 
 function fail(stderr: string, code = 1): Result<never> {
   return { ok: false, code, stderr }
@@ -123,6 +137,24 @@ export function registerIpc(): void {
   ipcMain.handle(Channels.StageReset, async (_e, cwd: string, paths: string[]) => {
     if (!cwd) return fail('No repository selected')
     return stageReset(cwd, Array.isArray(paths) ? paths : [])
+  })
+
+  ipcMain.handle(Channels.HunkStage, async (_e, cwd: string, patch: string) => {
+    if (!cwd) return fail('No repository selected')
+    if (typeof patch !== 'string' || !patch.trim()) return fail('Empty patch')
+    return stageHunk(cwd, patch)
+  })
+
+  ipcMain.handle(Channels.HunkUnstage, async (_e, cwd: string, patch: string) => {
+    if (!cwd) return fail('No repository selected')
+    if (typeof patch !== 'string' || !patch.trim()) return fail('Empty patch')
+    return unstageHunk(cwd, patch)
+  })
+
+  ipcMain.handle(Channels.HunkDiscard, async (_e, cwd: string, patch: string) => {
+    if (!cwd) return fail('No repository selected')
+    if (typeof patch !== 'string' || !patch.trim()) return fail('Empty patch')
+    return discardHunk(cwd, patch)
   })
 
   ipcMain.handle(Channels.CommitCreate, async (_e, cwd: string, input: CommitInput) => {
@@ -337,6 +369,60 @@ export function registerIpc(): void {
     shell.showItemInFolder(fullPath)
   })
 
+  ipcMain.handle(Channels.ShellOpenExternal, async (_e, url: string) => {
+    if (typeof url !== 'string' || !url) return
+    if (!/^https?:\/\//i.test(url)) return
+    await shell.openExternal(url)
+  })
+
+  ipcMain.handle(Channels.CiAvailable, async () => {
+    const ok = await isGhAvailable()
+    return { ok: true as const, data: ok }
+  })
+
+  ipcMain.handle(
+    Channels.CiPrStatus,
+    async (_e, cwd: string, branch: string) => {
+      if (!cwd) return fail('No repository selected')
+      if (!branch) return fail('No branch provided')
+      return getPullRequestForBranch(cwd, branch)
+    }
+  )
+
+  ipcMain.handle(
+    Channels.PrList,
+    async (_e, cwd: string) => {
+      if (!cwd) return fail('No repository selected')
+      return listPullRequests(cwd)
+    }
+  )
+
+  ipcMain.handle(
+    Channels.PrRerunRun,
+    async (_e, cwd: string, runId: string, failedOnly: boolean) => {
+      if (!cwd) return fail('No repository selected')
+      if (!runId) return fail('No run ID provided')
+      return rerunRun(cwd, runId, failedOnly)
+    }
+  )
+
+  ipcMain.handle(
+    Channels.PrRerunLatest,
+    async (_e, cwd: string, failedOnly: boolean) => {
+      if (!cwd) return fail('No repository selected')
+      return rerunLatest(cwd, failedOnly)
+    }
+  )
+
+  ipcMain.handle(
+    Channels.CiCommitChecks,
+    async (_e, cwd: string, sha: string) => {
+      if (!cwd) return fail('No repository selected')
+      if (!sha) return fail('No commit SHA provided')
+      return getChecksForCommit(cwd, sha)
+    }
+  )
+
   ipcMain.handle(
     Channels.WindowResize,
     (_e, width: number, height: number) => {
@@ -351,4 +437,27 @@ export function registerIpc(): void {
     active: process.env.SIMPLEGIT_DRY_RUN === '1',
     logPath: process.env.SIMPLEGIT_DRY_RUN_LOG ?? join(process.cwd(), 'dry-run.log')
   }))
+
+  ipcMain.handle(Channels.SettingsGet, () => {
+    return { ok: true as const, data: getSettingsView() }
+  })
+
+  ipcMain.handle(Channels.SettingsUpdate, (_e, update: SettingsUpdate) => {
+    if (!update || typeof update !== 'object') return fail('Invalid update payload')
+    if (update.cursorApiKey !== undefined) {
+      const v = update.cursorApiKey
+      if (v === null) saveCursorApiKey(null)
+      else if (typeof v === 'string') saveCursorApiKey(v.trim() || null)
+      else return fail('Invalid cursorApiKey value')
+    }
+    if (typeof update.commitMessageRules === 'string') {
+      saveCommitMessageRules(update.commitMessageRules)
+    }
+    return { ok: true as const, data: getSettingsView() }
+  })
+
+  ipcMain.handle(Channels.AiGenerateCommitMessage, async (_e, cwd: string) => {
+    if (!cwd) return fail('No repository selected')
+    return generateCommitMessage(cwd)
+  })
 }

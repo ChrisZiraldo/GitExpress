@@ -1,11 +1,239 @@
-import type { GraphCommit, Ref, RefSet } from '@shared/types'
+import type { CheckRollupState, GraphCommit, Ref, RefSet } from '@shared/types'
 import { computeLanes, type GraphRow } from '../graph/computeLanes'
 import { laneColor } from './colors'
+
+/** Optional CI status filter for branch tips. Mirrors `MetroFilters.ciStatus`
+ * in the store but kept here so layout can be tested without the renderer. */
+export type CiTipFilter = 'all' | 'passing' | 'failing' | 'pending' | 'none'
+
+/** Date window enum, mirrors `DateRangeFilter` in the store. */
+export type DateRangeFilter = 'all' | '7d' | '30d' | '90d'
+
+/** Convert a `DateRangeFilter` into a UNIX-ms cutoff (or null for 'all').
+ * Anchored at `now` so the cutoff slides with the user's clock. */
+export function dateRangeCutoff(
+  range: DateRangeFilter,
+  now: number = Date.now()
+): number | null {
+  switch (range) {
+    case '7d':
+      return now - 7 * 24 * 60 * 60 * 1000
+    case '30d':
+      return now - 30 * 24 * 60 * 60 * 1000
+    case '90d':
+      return now - 90 * 24 * 60 * 60 * 1000
+    default:
+      return null
+  }
+}
+
+/** Build the `ciByHash` map from the store's `ciByCommit` slice, keyed by
+ * commit SHA → rollup state (or null for "no PR / no checks"). Entries
+ * absent from this map mean "still loading" and are NOT filtered out. */
+export function buildCiByHash(
+  ciByCommit: Record<string, { rollup: CheckRollupState } | null>
+): Map<string, CheckRollupState | null> {
+  const out = new Map<string, CheckRollupState | null>()
+  for (const [sha, info] of Object.entries(ciByCommit)) {
+    out.set(sha, info ? info.rollup : null)
+  }
+  return out
+}
+
+/** Map a `CheckRollupState` (or `null` for "no PR / no data") onto the
+ * categories the filter exposes. Treats unknowns conservatively: a tip
+ * whose CI hasn't been fetched yet (`undefined` lookup) is reported as
+ * `'unknown'` so callers can decide whether to keep or hide it. */
+function ciCategory(
+  rollup: CheckRollupState | null | undefined
+): 'passing' | 'failing' | 'pending' | 'none' | 'unknown' {
+  if (rollup === undefined) return 'unknown'
+  if (rollup === null) return 'none'
+  if (rollup === 'success') return 'passing'
+  if (rollup === 'failure') return 'failing'
+  if (rollup === 'pending') return 'pending'
+  return 'none'
+}
+
+/**
+ * Walks the parent graph from each starting hash and returns the union of all
+ * commits reachable. Used both to compute "is this branch merged into main?"
+ * and to drop unreachable commits from the layout when a branch is hidden.
+ */
+function reachableFrom(
+  starts: Iterable<string>,
+  graph: GraphCommit[]
+): Set<string> {
+  const byHash = new Map<string, GraphCommit>()
+  for (const c of graph) byHash.set(c.hash, c)
+  const out = new Set<string>()
+  const queue: string[] = []
+  for (const s of starts) queue.push(s)
+  while (queue.length > 0) {
+    const h = queue.pop()!
+    if (out.has(h)) continue
+    out.add(h)
+    const c = byHash.get(h)
+    if (!c) continue
+    for (const p of c.parents) queue.push(p)
+  }
+  return out
+}
+
+/**
+ * Applies all branch-visibility filters by dropping local branches (and their
+ * unreachable commits) before layout. Always preserves the current branch and
+ * the trunk (main/master) so the user can never accidentally hide everything.
+ *
+ * Filter semantics (all are AND-ed together):
+ *   - showMerged=false: drop branches whose tip is reachable from trunk.
+ *   - showStale=false:  drop branches without an upstream tracking ref.
+ *   - ciFilter≠'all':   drop branches whose tip CI rollup doesn't match.
+ *                       A tip whose CI is still loading (no entry in
+ *                       `ciByHash`) is kept on the map — better UX than
+ *                       making rows flicker as the network resolves.
+ *   - author≠null:      drop branches whose tip's author email doesn't
+ *                       match (case-insensitive exact match).
+ *   - dateCutoffMs≠null:drop branches whose tip's commit date is older
+ *                       than the cutoff.
+ */
+function applyVisibilityFilters(
+  graph: GraphCommit[],
+  refs: RefSet,
+  opts: {
+    showMerged: boolean
+    showStale: boolean
+    ciFilter: CiTipFilter
+    ciByHash: Map<string, CheckRollupState | null> | null
+    author: string | null
+    dateCutoffMs: number | null
+  }
+): { graph: GraphCommit[]; refs: RefSet; hiddenLocalNames: Set<string> } {
+  const hidden = new Set<string>()
+  const trunk =
+    refs.local.find((r) => r.name === 'main') ??
+    refs.local.find((r) => r.name === 'master') ??
+    null
+
+  // Pre-compute "merged into trunk" set if we need to filter merged branches.
+  let mergedHashes: Set<string> | null = null
+  if (!opts.showMerged && trunk) {
+    const reachableFromTrunk = reachableFrom([trunk.hash], graph)
+    mergedHashes = new Set<string>()
+    for (const r of refs.local) {
+      if (r.hash === trunk.hash) continue
+      if (r.current) continue
+      if (reachableFromTrunk.has(r.hash)) mergedHashes.add(r.hash)
+    }
+  }
+
+  // Index commits by hash so we can look up tip metadata cheaply.
+  const byHash = new Map<string, GraphCommit>()
+  for (const c of graph) byHash.set(c.hash, c)
+
+  const wantAuthor = opts.author?.toLowerCase() ?? null
+
+  for (const r of refs.local) {
+    if (r.current) continue // never hide current branch
+    if (r === trunk) continue // never hide trunk
+    if (!opts.showStale && !r.upstream) {
+      hidden.add(r.fullName)
+      continue
+    }
+    if (!opts.showMerged && mergedHashes?.has(r.hash)) {
+      hidden.add(r.fullName)
+      continue
+    }
+    if (opts.ciFilter !== 'all') {
+      const cat = ciCategory(opts.ciByHash?.get(r.hash))
+      // Keep "unknown" so the row doesn't disappear while CI is still
+      // loading — once the fetch resolves the row will re-evaluate.
+      if (cat !== 'unknown' && cat !== opts.ciFilter) {
+        hidden.add(r.fullName)
+        continue
+      }
+    }
+    if (wantAuthor) {
+      const tip = byHash.get(r.hash)
+      const email = tip?.email?.toLowerCase() ?? ''
+      if (email !== wantAuthor) {
+        hidden.add(r.fullName)
+        continue
+      }
+    }
+    if (opts.dateCutoffMs !== null) {
+      const tip = byHash.get(r.hash)
+      const t = tip?.date ? Date.parse(tip.date) : NaN
+      if (!Number.isFinite(t) || t < opts.dateCutoffMs) {
+        hidden.add(r.fullName)
+        continue
+      }
+    }
+  }
+
+  if (hidden.size === 0) {
+    return { graph, refs, hiddenLocalNames: new Set() }
+  }
+
+  const visibleLocal = refs.local.filter((r) => !hidden.has(r.fullName))
+  const visibleTips: string[] = []
+  for (const r of visibleLocal) visibleTips.push(r.hash)
+  for (const r of refs.remote) visibleTips.push(r.hash)
+  for (const r of refs.tags) visibleTips.push(r.hash)
+  // Detached HEAD or no refs at all → keep at least the newest commit so the
+  // map isn't blank.
+  if (visibleTips.length === 0 && graph.length > 0) visibleTips.push(graph[0].hash)
+  const reachable = reachableFrom(visibleTips, graph)
+  const filteredGraph = graph.filter((c) => reachable.has(c.hash))
+
+  return {
+    graph: filteredGraph,
+    refs: { local: visibleLocal, remote: refs.remote, tags: refs.tags },
+    hiddenLocalNames: new Set(
+      [...hidden]
+        .map((full) => full.replace(/^refs\/heads\//, ''))
+    )
+  }
+}
 
 /**
  * Classifies a branch name as belonging above or below the main lane.
  * Returns 'auto' when we can't decide and the caller should balance it.
  */
+/**
+ * Pick a display name for a lane's terminus pill from the refs present on
+ * its tip station. Preference order:
+ *
+ *   1. Local branch (`refs/heads/<name>`) — the canonical "this is your
+ *      branch" signal.
+ *   2. Remote-tracking branch (`refs/remotes/<remote>/<name>`, excluding
+ *      `<remote>/HEAD` symbolic refs) — covers branches that exist on the
+ *      remote but aren't checked out locally, so origin-only feature
+ *      branches still get a labeled lane instead of an anonymous one.
+ *   3. Tag (`refs/tags/<name>`) as a last resort, prefixed `tag:` so the
+ *      pill clearly distinguishes a tag-anchored lane from a real branch.
+ *
+ * Returns null when no suitable ref is present (the lane stays anonymous
+ * and won't render a pill at all).
+ */
+function pickLaneBranchName(stationRefs: { fullName: string; name: string }[]): string | null {
+  const local = stationRefs.find((r) => r.fullName.startsWith('refs/heads/'))
+  if (local) return local.name
+  const remote = stationRefs.find(
+    (r) =>
+      r.fullName.startsWith('refs/remotes/') && !r.fullName.endsWith('/HEAD')
+  )
+  if (remote) {
+    // r.name is typically like "origin/feature-x"; strip the first path
+    // segment so the pill reads "feature-x" not "origin/feature-x".
+    const slash = remote.name.indexOf('/')
+    return slash >= 0 ? remote.name.slice(slash + 1) : remote.name
+  }
+  const tag = stationRefs.find((r) => r.fullName.startsWith('refs/tags/'))
+  if (tag) return `tag: ${tag.name}`
+  return null
+}
+
 function classifyLaneSide(name: string | undefined): 'above' | 'below' | 'auto' {
   if (!name) return 'auto'
   if (/^(feat|feature)\//i.test(name)) return 'above'
@@ -95,6 +323,9 @@ export interface MetroStation {
   subject: string
   author: string
   email: string
+  /** ISO timestamp from `git log`; used by renderers that need the
+   * absolute date (e.g. the "Start" terminus marker showing "Mar 1"). */
+  date: string
   relativeDate: string
   row: number // index in the graph (0 = newest)
   lane: number
@@ -107,6 +338,16 @@ export interface MetroStation {
   refs: Ref[]
   isHead: boolean
   hasTag: boolean
+  /** For interchange/merge stations: the lane index of the FIRST branch
+   * being merged in. Used to color the merge dot in the merging branch's
+   * color (e.g. a "merge feature/auth" interchange on main is filled
+   * purple, not blue). Null when the station isn't a merge or has no
+   * incoming lanes. */
+  mergeFromLane: number | null
+  /** True when this station is the OLDEST station on a stale lane (i.e.
+   * the abandoned-branch tip). Renderer treats these as terminal markers
+   * with an "abandoned" glyph. */
+  isAbandonedTip: boolean
 }
 
 export interface MetroLaneLabel {
@@ -163,6 +404,8 @@ export interface MetroLayout {
   mainLane: number
   /** y coordinate of the trunk lane — used for initial scroll centering. */
   mainLaneY: number
+  /** Local branch names that were filtered out by `showMerged`/`showStale`. */
+  hiddenLocalNames: Set<string>
 }
 
 export interface MetroLayoutOpts {
@@ -172,6 +415,21 @@ export interface MetroLayoutOpts {
   rightPad?: number
   topPad?: number
   bottomPad?: number
+  /** Include local branches that are fully merged into main/master. Default true. */
+  showMerged?: boolean
+  /** Include local branches with no upstream (stale). Default true. */
+  showStale?: boolean
+  /** Keep only branches whose tip CI rollup matches. Default 'all'. */
+  ciFilter?: CiTipFilter
+  /** Cached CI rollup per branch tip. Used by `ciFilter`; missing entries
+   * mean "still loading" and are kept on the map. */
+  ciByHash?: Map<string, CheckRollupState | null>
+  /** Keep only branches whose tip's author email matches (case-insensitive).
+   * Pass null/undefined to disable. */
+  author?: string | null
+  /** Keep only branches whose tip commit is at or after this UNIX-ms cutoff.
+   * Pass null/undefined to disable. */
+  dateCutoffMs?: number | null
 }
 
 /**
@@ -181,17 +439,39 @@ export interface MetroLayoutOpts {
  *   - y axis is branch lanes stacked top-to-bottom.
  */
 export function computeMetroLayout(
-  graph: GraphCommit[],
-  refs: RefSet,
+  graphIn: GraphCommit[],
+  refsIn: RefSet,
   currentBranch: string | null,
   opts: MetroLayoutOpts = {}
 ): MetroLayout {
   const colWidth = opts.colWidth ?? 52
-  const laneHeight = opts.laneHeight ?? 56
+  const laneHeight = opts.laneHeight ?? 64
   const leftPad = opts.leftPad ?? 96
   const rightPad = opts.rightPad ?? 200
-  const topPad = opts.topPad ?? 44
-  const bottomPad = opts.bottomPad ?? 56
+  const topPad = opts.topPad ?? 48
+  const bottomPad = opts.bottomPad ?? 60
+  const showMerged = opts.showMerged ?? true
+  const showStale = opts.showStale ?? true
+  const ciFilter = opts.ciFilter ?? 'all'
+  const ciByHash = opts.ciByHash ?? null
+  const author = opts.author ?? null
+  const dateCutoffMs = opts.dateCutoffMs ?? null
+
+  // Apply branch-visibility filters once, then run the full layout pipeline
+  // against the filtered graph + refs. This keeps the rest of the function
+  // (lane assignment, remap, station placement) blissfully unaware of which
+  // branches are user-hidden.
+  const filtered = applyVisibilityFilters(graphIn, refsIn, {
+    showMerged,
+    showStale,
+    ciFilter,
+    ciByHash,
+    author,
+    dateCutoffMs
+  })
+  const graph = filtered.graph
+  const refs = filtered.refs
+  const hiddenLocalNames = filtered.hiddenLocalNames
 
   // Pin all local branch tips so sibling branches never share a lane.
   const pinnedTips = new Set<string>()
@@ -309,12 +589,28 @@ export function computeMetroLayout(
     else if (isMerge) kind = 'interchange'
     else if (hasTag) kind = 'tag'
 
+    // For interchange stations, prefer a lane from `mergeFrom` (the lane(s)
+     // that are visibly terminating into this commit). If none, fall back to
+     // a non-self parent lane. We expose the FIRST such lane so the station
+     // dot can be filled in the merging branch's color.
+    let mergeFromLane: number | null = null
+    if (isMerge) {
+      const candidate = mergeFrom.find((l) => l >= 0 && l !== lane)
+      if (candidate !== undefined) {
+        mergeFromLane = candidate
+      } else {
+        const altParent = parentLanes.find((l) => l >= 0 && l !== lane)
+        if (altParent !== undefined) mergeFromLane = altParent
+      }
+    }
+
     stations.push({
       hash: commit.hash,
       shortHash: commit.shortHash,
       subject: commit.subject,
       author: commit.author,
       email: commit.email,
+      date: commit.date,
       relativeDate: commit.relativeDate,
       row: i,
       lane,
@@ -324,10 +620,17 @@ export function computeMetroLayout(
       color: laneColor(lane),
       refs: stationRefs,
       isHead,
-      hasTag
+      hasTag,
+      mergeFromLane,
+      // Filled in below once we know which row is the lane terminus.
+      isAbandonedTip: false
     })
 
-    // Track first appearance of each lane (smallest row index = newest commit on that lane)
+    // Track first appearance of each lane (smallest row index = newest commit
+    // on that lane). `laneBranchName` is reserved for LOCAL branch names
+    // because it's the key used by stale-lane detection downstream
+    // (`refs.local.find(...)`); pill display names that fall back to remote
+    // or tag refs are computed separately at pill-build time.
     if (!laneFirstRow.has(lane)) {
       laneFirstRow.set(lane, i)
       const localRef = stationRefs.find((r) => r.fullName.startsWith('refs/heads/'))
@@ -353,9 +656,27 @@ export function computeMetroLayout(
   }
   if (laneCount === 0) laneCount = 1
 
+  // Build the pill display name per lane, falling back from local branch →
+  // remote tracking branch → tag. Done as a second pass so a station with
+  // a tag at the lane's tip doesn't pre-empt a local branch that appears
+  // on an OLDER commit further down the lane (the original semantic of
+  // `laneBranchName` was "find a local ref ANYWHERE on this lane").
+  const laneDisplayName = new Map<number, string>()
+  for (const [lane, name] of laneBranchName.entries()) laneDisplayName.set(lane, name)
+  if (laneDisplayName.size < laneFirstRow.size) {
+    for (let i = 0; i < laneLayout.rows.length; i++) {
+      const row = laneLayout.rows[i]
+      const lane = row.lane
+      if (laneDisplayName.has(lane)) continue
+      const refsAtRow = refsByCommit.get(row.commit.hash) ?? []
+      const fallback = pickLaneBranchName(refsAtRow)
+      if (fallback) laneDisplayName.set(lane, fallback)
+    }
+  }
+
   const laneLabels: MetroLaneLabel[] = []
   for (const [lane] of laneFirstRow.entries()) {
-    const name = laneBranchName.get(lane)
+    const name = laneDisplayName.get(lane)
     if (!name) continue
     laneLabels.push({
       lane,
@@ -385,6 +706,15 @@ export function computeMetroLayout(
     const r = refs.local.find((ref) => ref.name === name)
     if (!r) continue
     if (!r.upstream && !r.current) staleLanes.add(lane)
+  }
+
+  // Mark abandoned-tip stations: the OLDEST station on a stale lane gets a
+  // distinct terminal marker so the user can spot dead branch ends visually.
+  for (const s of stations) {
+    if (!staleLanes.has(s.lane)) continue
+    if (s.row === (laneMaxRow.get(s.lane) ?? -1)) {
+      s.isAbandonedTip = true
+    }
   }
 
   const terminals: MetroTerminal[] = []
@@ -432,6 +762,7 @@ export function computeMetroLayout(
     headLaneY,
     tipLane,
     mainLane,
-    mainLaneY: ly(mainLane)
+    mainLaneY: ly(mainLane),
+    hiddenLocalNames
   }
 }
