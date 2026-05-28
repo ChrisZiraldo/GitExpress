@@ -19,7 +19,7 @@ import { CiBadge } from './CiBadge'
 import { SettingsDialog } from './SettingsDialog'
 
 const TABS: { id: MetroViewTab; label: string }[] = [
-  { id: 'history', label: 'History' },
+  { id: 'history', label: 'Map' },
   { id: 'prs', label: 'Pull Requests' },
   { id: 'insights', label: 'Insights' },
   { id: 'authors', label: 'Authors' }
@@ -103,6 +103,17 @@ export function TopBar(): JSX.Element {
 
   const fetchAll = (): Promise<void> =>
     runWithBusy('Fetch', () => window.git.remote.fetch(activeRepo!.path))
+
+  // Silent background fetch every 60 s — no spinner, no success toast.
+  useEffect(() => {
+    if (!activeRepo) return
+    const id = setInterval(async () => {
+      const res = await window.git.remote.fetch(activeRepo.path)
+      if (!res.ok) pushToast('error', `Auto-fetch failed: ${res.stderr}`)
+      else refreshSignal()
+    }, 60_000)
+    return () => clearInterval(id)
+  }, [activeRepo?.path])
   const pull = (): Promise<void> =>
     runWithBusy('Pull', () => window.git.remote.pull(activeRepo!.path, {}))
   const push = (): Promise<void> =>
@@ -300,11 +311,8 @@ export function TopBar(): JSX.Element {
         />
       </div>
 
-      {/* Spacer */}
-      <div className="flex-1" />
-
-      {/* View tabs */}
-      <div className="titlebar-nodrag flex items-center rounded-md overflow-hidden border border-line text-xs shrink-0 ml-1">
+      {/* View tabs — beside the All Branches button */}
+      <div className="titlebar-nodrag flex items-center rounded-md overflow-hidden border border-line text-xs shrink-0">
         {TABS.map((t) => {
           const active = metroViewTab === t.id
           return (
@@ -323,6 +331,9 @@ export function TopBar(): JSX.Element {
           )
         })}
       </div>
+
+      {/* Spacer */}
+      <div className="flex-1" />
 
       {/* Branch ahead/behind + CI status for current branch's PR */}
       {activeRepo && branch && (

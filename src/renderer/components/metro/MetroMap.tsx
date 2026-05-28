@@ -26,7 +26,7 @@ import {
   LABEL_COLOR,
   LABEL_COLOR_SELECTED
 } from './colors'
-import { branchOffPath, laneRunPath } from './paths'
+import { branchOffPathVertical, laneRunPath } from './paths'
 import { Station } from './Station'
 import { TrainMarker } from './TrainMarker'
 import { ContextMenu, type MenuItem } from '../ContextMenu'
@@ -35,6 +35,7 @@ import type { CheckRollupState, CommitChecksInfo } from '@shared/types'
 
 const ZOOM_MIN = 0.55
 const ZOOM_MAX = 1.6
+const COMMIT_LABEL_PAD = 12
 
 interface Tooltip {
   station: MetroStation
@@ -72,6 +73,7 @@ export function MetroMap(): JSX.Element {
     clientWidth: 800,
     clientHeight: 600
   })
+
 
   const ciByHash = useMemo(() => buildCiByHash(ciByCommit), [ciByCommit])
 
@@ -135,8 +137,9 @@ export function MetroMap(): JSX.Element {
     if (didInitialScrollRef.current) return
     if (layout.width === 0) return
     didInitialScrollRef.current = true
-    const targetTop = Math.max(0, layout.mainLaneY * zoom - el.clientHeight / 2)
-    el.scrollTo({ left: layout.width * zoom, top: targetTop, behavior: 'auto' })
+    // Vertical layout: scroll to top (newest commits), center main lane horizontally
+    const targetLeft = Math.max(0, layout.mainLaneY * zoom - el.clientWidth / 2)
+    el.scrollTo({ left: targetLeft, top: 0, behavior: 'auto' })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout.width, layout.mainLaneY])
 
@@ -190,8 +193,10 @@ export function MetroMap(): JSX.Element {
     if (!mapMounted) return
     const el = scrollRef.current
     if (!el) return
+
+    // Debounced update for CI frustum culling (avoids spamming gh fetches).
     let timer: ReturnType<typeof setTimeout> | null = null
-    const update = (): void => {
+    const updateDebounced = (): void => {
       setViewport({
         scrollLeft: el.scrollLeft,
         scrollTop: el.scrollTop,
@@ -199,17 +204,20 @@ export function MetroMap(): JSX.Element {
         clientHeight: el.clientHeight
       })
     }
-    const schedule = (): void => {
+    const scheduleDebounced = (): void => {
       if (timer) clearTimeout(timer)
-      timer = setTimeout(update, 150)
+      timer = setTimeout(updateDebounced, 150)
     }
-    update() // initial sample now that the div exists
-    el.addEventListener('scroll', schedule, { passive: true })
-    window.addEventListener('resize', schedule)
+
+    // Seed on mount
+    updateDebounced()
+
+    el.addEventListener('scroll', scheduleDebounced, { passive: true })
+    window.addEventListener('resize', scheduleDebounced)
     return () => {
       if (timer) clearTimeout(timer)
-      el.removeEventListener('scroll', schedule)
-      window.removeEventListener('resize', schedule)
+      el.removeEventListener('scroll', scheduleDebounced)
+      window.removeEventListener('resize', scheduleDebounced)
     }
   }, [mapMounted])
 
@@ -497,14 +505,19 @@ export function MetroMap(): JSX.Element {
             <ColumnGrid layout={layout} />
             <Lines layout={layout} highlight={isLaneHighlighted} />
             <Curves layout={layout} highlight={isLaneHighlighted} />
-            <Trains layout={layout} refs={refs} />
-
-            {/* Per-station inline labels — small text next to every station */}
-            <StationLabels
+            {/* Connector lines rendered under everything else so they don't
+                obscure station dots or badges. Pill lines extend from x=0
+                to the station (the sticky pill sits over x=0 in the viewport).
+                Label dotted lines extend from the station all the way to the
+                SVG's right edge — the scroll container clips them exactly at
+                the viewport boundary where the sticky label lives, making
+                them appear to terminate at the label. */}
+            <ConnectorLines
               layout={layout}
               highlight={isLaneHighlighted}
               selectedHash={selectedCommit}
             />
+            <Trains layout={layout} refs={refs} />
 
             <TagBadges layout={layout} highlight={isLaneHighlighted} ciByCommit={ciByCommit} />
 
@@ -528,7 +541,6 @@ export function MetroMap(): JSX.Element {
               )
             })}
 
-            <HeadBadge layout={layout} status={status?.branch ?? null} ciByCommit={ciByCommit} />
             <AheadBadge layout={layout} status={status?.branch ?? null} />
             <ConflictBadge
               layout={layout}
@@ -543,11 +555,170 @@ export function MetroMap(): JSX.Element {
               ciCommitLoading={ciCommitLoading}
             />
           </svg>
+
+          {/* ── Branch name pills — sticky-left, scroll vertically with map ──
+              Each pill lives at the world-y of its branch tip, inside the same
+              scroll container as the SVG. `position: sticky; left` keeps it
+              pinned to the left viewport edge as the user scrolls horizontally,
+              while the outer `position: absolute; top` means it scrolls
+              vertically together with the map on the same compositor layer —
+              zero JS lag. */}
+          {layout.terminals.map((t) => {
+            const dim = !isLaneHighlighted(t.lane)
+            const color = t.stale ? laneStaleTint(t.color) : t.color
+            const worldY = (t.y + layout.laneHeight * 0.55) * zoom
+            const pillLabel = truncate(t.name, 26)
+            const pillH = 17
+            const isHead = t.lane === layout.headStation?.lane
+            const ci = isHead ? ciStateFor(layout.headStation?.hash, ciByCommit) : null
+            return (
+              <div
+                key={`pill-${t.lane}`}
+                style={{
+                  position: 'absolute',
+                  top: worldY - pillH / 2,
+                  left: 0,
+                  right: 0,
+                  height: pillH,
+                  overflow: 'visible',
+                  pointerEvents: 'none',
+                  zIndex: 10,
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+              >
+                <div
+                  title={isHead ? t.name : `Double-click to checkout ${t.name}`}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation()
+                    if (!activeRepo || isHead) return
+                    runWithBusy(`Checkout ${t.name}`, () =>
+                      window.git.branch.checkout(activeRepo.path, t.name)
+                    )
+                  }}
+                  style={{
+                    position: 'sticky',
+                    left: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    boxSizing: 'border-box',
+                    height: pillH,
+                    paddingLeft: 14,
+                    paddingRight: 10,
+                    borderRadius: pillH / 2,
+                    background: '#0b0e14',
+                    border: `1.5px solid ${color}CC`,
+                    fontSize: 10,
+                    fontWeight: 600,
+                    color: color,
+                    letterSpacing: '0.01em',
+                    whiteSpace: 'nowrap',
+                    opacity: dim ? 0.25 : 1,
+                    userSelect: 'none',
+                    pointerEvents: 'auto',
+                    cursor: isHead ? 'default' : 'pointer',
+                  }}
+                >
+                  {pillLabel}
+                  {isHead && (
+                    <span style={{
+                      fontSize: 8,
+                      fontWeight: 700,
+                      letterSpacing: '0.1em',
+                      color: color,
+                      opacity: 0.75,
+                      background: `${color}22`,
+                      padding: '1px 4px',
+                      borderRadius: 3,
+                    }}>
+                      HEAD
+                    </span>
+                  )}
+                  {ci && (
+                    <span style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: '50%',
+                      flexShrink: 0,
+                      background: ci === 'success' ? '#22c55e' : ci === 'failure' ? '#ef4444' : '#f59e0b',
+                    }} />
+                  )}
+                </div>
+              </div>
+            )
+          })}
+
+          {/* ── Commit message labels — sticky-right, scroll vertically with map ──
+              Same compositor-layer trick as the pills above. The outer wrapper
+              spans the full content width (left:0 right:0) so the inner
+              sticky element has enough room to slide to the right edge.
+              `flex-direction: row-reverse` pushes the sticky child to the
+              right, and `position: sticky; right` keeps it at the viewport's
+              right edge as the user scrolls horizontally. */}
+          {(() => {
+            const headHash = layout.headStation?.hash ?? null
+            return layout.stations
+              .filter((s) => s.hash !== headHash)
+              .map((s) => {
+                const dim = !isLaneHighlighted(s.lane)
+                const isSelected = selectedCommit === s.hash
+                const subject = truncate(s.subject, 50)
+                const meta = `${s.author} · ${s.relativeDate}`
+                const worldY = s.y * zoom
+                return (
+                  <div
+                    key={`lbl-${s.hash}`}
+                    style={{
+                      position: 'absolute',
+                      top: worldY - 13,
+                      left: 0,
+                      right: 0,
+                      height: 0,
+                      overflow: 'visible',
+                      pointerEvents: 'none',
+                      zIndex: 10,
+                      display: 'flex',
+                      flexDirection: 'row-reverse',
+                    }}
+                  >
+                    <div
+                      style={{
+                        position: 'sticky',
+                        right: COMMIT_LABEL_PAD,
+                        opacity: dim ? 0.22 : 1,
+                        textAlign: 'right',
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 12,
+                          fontWeight: isSelected ? 600 : 400,
+                          color: isSelected ? LABEL_COLOR_SELECTED : LABEL_COLOR,
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {subject}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 10,
+                          color: '#6b7280',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {meta}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })
+          })()}
         </div>
       </div>
 
       {/* Compass + Legend overlay at top-left */}
-      <CompassOverlay />
 
       {/* Zoom controls bottom-left */}
       <ZoomControls
@@ -593,19 +764,18 @@ interface LaneTracksProps {
 }
 
 function LaneTracks({ layout, highlight }: LaneTracksProps): JSX.Element {
-  // Faint lane guides — kept very subtle so the actual rails (with casings)
-  // carry the visual weight, like a real Tube map.
+  // Faint vertical lane guides — one per lane column.
   const els: JSX.Element[] = []
   for (let l = 0; l < layout.laneCount; l++) {
-    const y = layout.topPad + l * layout.laneHeight + layout.laneHeight / 2
+    const x = layout.leftPad + l * layout.colWidth + layout.colWidth / 2
     const dim = !highlight(l)
     els.push(
       <line
         key={`track-${l}`}
-        x1={0}
-        x2={layout.width}
-        y1={y}
-        y2={y}
+        x1={x}
+        x2={x}
+        y1={0}
+        y2={layout.height}
         stroke={laneColor(l)}
         strokeWidth={1}
         opacity={dim ? 0.02 : 0.04}
@@ -636,18 +806,16 @@ interface LinesProps {
  * stays solid so the line still reads as a real route.
  */
 function Lines({ layout, highlight }: LinesProps): JSX.Element {
-  const { rows, colWidth } = layout
+  const { rows, colWidth, laneHeight } = layout
   const STROKE = 5.5
   const CASING = STROKE + 3
-  const xAt = (rowIdx: number): number =>
-    layout.leftPad + (layout.cols - 1 - rowIdx) * colWidth + colWidth / 2
-  const yAt = (lane: number): number =>
-    layout.topPad + lane * layout.laneHeight + layout.laneHeight / 2
+  // x is fixed per lane column; y varies per row
+  const xAt = (lane: number): number =>
+    layout.leftPad + lane * colWidth + colWidth / 2
+  const yAt = (rowIdx: number): number =>
+    layout.topPad + rowIdx * laneHeight + laneHeight / 2
 
-  // Group continuous runs of live cells per lane into separate path segments
-  // (gaps in `liveLanes` should split the rail). For each lane we walk rows
-  // newest→oldest (the natural row order) and emit a path whenever a live
-  // run ends.
+  // Group continuous live-cell runs per lane into path segments.
   const laneRuns = new Map<number, Array<Array<{ x: number; y: number }>>>()
   for (let l = 0; l < layout.laneCount; l++) {
     const runs: Array<Array<{ x: number; y: number }>> = []
@@ -660,7 +828,7 @@ function Lines({ layout, highlight }: LinesProps): JSX.Element {
           current = []
           runs.push(current)
         }
-        current.push({ x: xAt(i), y: yAt(l) })
+        current.push({ x: xAt(l), y: yAt(i) })
       } else if (current) {
         current = null
       }
@@ -722,19 +890,19 @@ function Lines({ layout, highlight }: LinesProps): JSX.Element {
     }
   }
 
-  // Future stub past HEAD — dotted, suggesting "track ahead".
+  // Future stub above HEAD — dotted upward, suggesting "track ahead".
   if (rows.length > 0) {
     const newest = rows[0]
-    const y = yAt(newest.lane)
-    const x0 = xAt(0)
-    const x1 = x0 + colWidth * 2.1
+    const x = xAt(newest.lane)
+    const y0 = yAt(0)
+    const y1 = y0 - laneHeight * 2.1
     els.push(
       <line
         key="stub-future-casing"
-        x1={x0}
-        x2={x1}
-        y1={y}
-        y2={y}
+        x1={x}
+        x2={x}
+        y1={y0}
+        y2={y1}
         stroke={laneCasing(laneColor(newest.lane))}
         strokeWidth={CASING}
         strokeLinecap="round"
@@ -744,10 +912,10 @@ function Lines({ layout, highlight }: LinesProps): JSX.Element {
     els.push(
       <line
         key="stub-future"
-        x1={x0}
-        x2={x1}
-        y1={y}
-        y2={y}
+        x1={x}
+        x2={x}
+        y1={y0}
+        y2={y1}
         stroke={laneColor(newest.lane)}
         strokeWidth={STROKE}
         strokeLinecap="round"
@@ -775,30 +943,27 @@ function Curves({ layout, highlight }: CurvesProps): JSX.Element {
   const CASING = STROKE + 3
   const casings: JSX.Element[] = []
   const inners: JSX.Element[] = []
-  const xAt = (rowIdx: number): number =>
-    layout.leftPad + (layout.cols - 1 - rowIdx) * colWidth + colWidth / 2
-  const yAt = (lane: number): number =>
-    layout.topPad + lane * layout.laneHeight + layout.laneHeight / 2
+  // Vertical layout: x is fixed per lane, y varies per row
+  const xAt = (lane: number): number =>
+    layout.leftPad + lane * colWidth + colWidth / 2
+  const yAt = (rowIdx: number): number =>
+    layout.topPad + rowIdx * laneHeight + laneHeight / 2
 
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]
     const { commit, lane, parentLanes } = row
-    const x1 = xAt(i)
-    const y1 = yAt(lane)
+    const x1 = xAt(lane)
+    const y1 = yAt(i)
 
-    // Branch-off: this commit's parent lives on a different lane (further
-    // left). The branch belongs to the CHILD's lane (e.g. feature/auth) —
-    // its color extends through the elbow down to the trunk, just like a
-    // real Tube line keeps its color throughout.
     for (let pi = 0; pi < parentLanes.length; pi++) {
       const pl = parentLanes[pi]
       if (pl < 0 || pl === lane) continue
       const parentHash = commit.parents[pi]
       const parentRow = rows.findIndex((r) => r.commit.hash === parentHash)
       if (parentRow === -1) continue
-      const x2 = xAt(parentRow)
-      const y2 = yAt(pl)
-      const d = branchOffPath(x1, y1, x2, y2, laneHeight, colWidth)
+      const x2 = xAt(pl)
+      const y2 = yAt(parentRow)
+      const d = branchOffPathVertical(x1, y1, x2, y2, laneHeight, colWidth)
       const dim = !highlight(pl) && !highlight(lane)
       const stale = layout.staleLanes.has(lane)
       const branchColor = laneColor(lane)
@@ -848,6 +1013,99 @@ function Curves({ layout, highlight }: CurvesProps): JSX.Element {
   return <g>{casings}{inners}</g>
 }
 
+interface ConnectorLinesProps {
+  layout: MetroLayout
+  highlight: (lane: number) => boolean
+  selectedHash: string | null
+}
+
+/**
+ * Pill connector lines (solid, from x=0 to station) and label dotted lines
+ * (dashed, from station to the SVG's far-right edge). Both are drawn in SVG
+ * world coordinates so they scroll natively with the map.
+ *
+ * The pill line starts at x=0 — the CSS-sticky pill sits over that origin in
+ * the viewport, so they visually connect without any JS position sync.
+ *
+ * The label dotted line extends to `layout.width` — the scroll container's
+ * overflow:auto clips SVG content at the viewport's right edge, which is
+ * exactly where the sticky label lives. The line always appears to terminate
+ * right at the label.
+ */
+function ConnectorLines({ layout, highlight, selectedHash }: ConnectorLinesProps): JSX.Element {
+  const headHash = layout.headStation?.hash ?? null
+  const { laneHeight, rightPad } = layout
+  // x2 for label lines: extend to near the SVG's right edge.
+  // For maps wider than the viewport the SVG is clipped at the viewport's
+  // right boundary — exactly where the CSS-sticky label lives — so the line
+  // visually terminates at the label with no JS needed. For narrower maps the
+  // label sits at its natural position inside the label area, which is also
+  // near this x.
+  const labelLineX2 = layout.width - rightPad - 8
+  const els: JSX.Element[] = []
+
+  // Map from lane → x of the newest (smallest row index) station on that lane.
+  // Using the real station x avoids overshoot when laneFirstRow was seeded
+  // via a parent-lane reference and t.x (= lx(t.lane)) is further right than
+  // where the station dot actually sits.
+  const laneTipXFinal = new Map<number, number>()
+  {
+    const laneTipRow = new Map<number, number>()
+    for (const s of layout.stations) {
+      const curRow = laneTipRow.get(s.lane)
+      if (curRow === undefined || s.row < curRow) {
+        laneTipRow.set(s.lane, s.row)
+        laneTipXFinal.set(s.lane, s.x)
+      }
+    }
+  }
+
+  // Pill connector lines.
+  // t.y is the terminal anchor *above* the tip station:
+  //   t.y = stationY - laneHeight * 0.55
+  // Adding 0.55*laneHeight brings us to the actual station/pill y.
+  // x1 starts at the SVG left edge — the opaque sticky pill masks it.
+  for (const t of layout.terminals) {
+    const dim = !highlight(t.lane)
+    const color = t.stale ? laneStaleTint(t.color) : t.color
+    const lineY = t.y + laneHeight * 0.55
+    const stationX = laneTipXFinal.get(t.lane) ?? t.x
+    els.push(
+      <line
+        key={`pill-line-${t.lane}`}
+        x1={0} y1={lineY}
+        x2={stationX - 12} y2={lineY}
+        stroke={color}
+        strokeWidth={1.5}
+        strokeOpacity={dim ? 0.1 : 0.45}
+      />
+    )
+  }
+
+  // Commit label dotted lines.
+  for (const s of layout.stations) {
+    if (s.hash === headHash) continue
+    // Skip stations already inside the label area — their label is
+    // immediately adjacent and a long line would look wrong.
+    if (s.x + 12 >= labelLineX2) continue
+    const dim = !highlight(s.lane)
+    const isSelected = selectedHash === s.hash
+    els.push(
+      <line
+        key={`label-line-${s.hash}`}
+        x1={s.x + 12} y1={s.y}
+        x2={labelLineX2} y2={s.y}
+        stroke={s.color}
+        strokeWidth={1}
+        strokeOpacity={isSelected ? 0.4 : (dim ? 0.06 : 0.18)}
+        strokeDasharray="2 4"
+      />
+    )
+  }
+
+  return <g pointerEvents="none">{els}</g>
+}
+
 interface TrainsProps {
   layout: MetroLayout
   refs: { local: Ref[]; remote: Ref[] }
@@ -863,8 +1121,8 @@ function Trains({ layout, refs }: TrainsProps): JSX.Element {
   )
   for (const station of layout.stations) {
     if (!tipHashes.has(station.hash)) continue
-    const tx = station.x + layout.colWidth * 0.55
-    const ty = station.y
+    const tx = station.x
+    const ty = station.y - layout.laneHeight * 0.55
     els.push(
       <TrainMarker
         key={`train-tip-${station.hash}`}
@@ -892,12 +1150,12 @@ function Trains({ layout, refs }: TrainsProps): JSX.Element {
     const mid = laneStations[Math.floor(laneStations.length / 2)]
     // Offset slightly so the train sits between two stations rather than
     // ON one of them.
-    const offsetX = laneStations.length > 1 ? layout.colWidth * 0.5 : 0
+    const offsetY = laneStations.length > 1 ? layout.laneHeight * 0.5 : 0
     els.push(
       <TrainMarker
         key={`train-stale-${lane}`}
-        x={mid.x + offsetX}
-        y={mid.y}
+        x={mid.x}
+        y={mid.y + offsetY}
         color={mid.color}
         size="mid"
       />
@@ -907,181 +1165,12 @@ function Trains({ layout, refs }: TrainsProps): JSX.Element {
   return <g>{els}</g>
 }
 
-interface StationLabelsProps {
-  layout: MetroLayout
-  highlight: (lane: number) => boolean
-  selectedHash: string | null
-}
-
-/** Number of vertical "tracks" (slots) above/below each lane that a station
- *  label can occupy. Tube maps stagger station names along busy routes; we
- *  do the same — but with collision-aware slot picking instead of a blind
- *  alternation, because two slots aren't enough when many adjacent commits
- *  in a lane have wide subjects (e.g. ticketed-style "PROJ-123 [scope]
- *  ..." subjects all the same length back-to-back). With 3 slots and ~14px
- *  vertical step we can pack three labels into the horizontal span of one
- *  label without them visually colliding. */
-const LABEL_SLOTS = 3
-const LABEL_SLOT_STEP = 14
-
-/** Heuristic average char widths for label-bbox estimation. Tuned for the
- *  fontSize and font stack we use; off by a bit on extreme glyphs but good
- *  enough for collision-skip decisions. The horizontal padding is the
- *  "breathing room" we require between two labels in the same slot. */
-const LABEL_CHAR_W = 6.2
-const ROUTE_CHAR_W = 5.8
-const LABEL_PAD_X = 6
-
-/**
- * Inline subject labels above (or below) every station — like Tube map "stops"
- * along a route. Each label has a thin leader tick from the station up/down
- * to the label baseline. Interchange stations get a two-line variant so the
- * route name and subject can both read.
- *
- * Placement is collision-aware: for each station's lane we maintain N
- * vertical slots and pick the topmost slot whose previous label's right
- * edge sits to the LEFT of this station's label box. If no slot has room,
- * the label is dropped entirely (the station marker still shows; user can
- * click it for details). Selected stations bypass the collision skip so
- * the user always sees the label they're looking at.
- */
-function StationLabels({ layout, highlight, selectedHash }: StationLabelsProps): JSX.Element {
-  const els: JSX.Element[] = []
-  const midLane = (layout.laneCount - 1) / 2
-  const headHash = layout.headStation?.hash ?? null
-
-  // Right-edge of the most recently placed label per (lane, slot) — used to
-  // detect collisions with the next label in the same slot. Initialised
-  // lazily; missing keys are treated as -Infinity (slot is free).
-  const slotRightEdge = new Map<string, number>()
-
-  // Process stations in ascending x so collision detection only ever looks
-  // backward at already-placed labels. layout.stations is in commit-graph
-  // order which mostly correlates with x but isn't guaranteed when lanes
-  // criss-cross, so we sort defensively.
-  const sorted = layout.stations.slice().sort((a, b) => a.x - b.x)
-
-  for (const s of sorted) {
-    // HEAD gets its own big badge; tagged commits get a tag plaque.
-    if (s.hash === headHash) continue
-    if (s.hasTag) continue
-
-    const dim = !highlight(s.lane)
-    const isSelected = selectedHash === s.hash
-    const above = s.lane <= midLane
-
-    const isInterchange = s.kind === 'interchange'
-    const subject = truncate(s.subject, isInterchange ? 18 : 22)
-    const routeName = isInterchange ? deriveRouteName(s) : null
-
-    // Estimate label bbox (centered on s.x). Subject is the dominant width
-    // unless the route name is unusually long.
-    const subjW = subject.length * LABEL_CHAR_W
-    const routeW = (routeName?.length ?? 0) * ROUTE_CHAR_W
-    const labelW = Math.max(subjW, routeW) + LABEL_PAD_X * 2
-    const labelLeft = s.x - labelW / 2
-    const labelRight = s.x + labelW / 2
-
-    // Pick the topmost (closest-to-rail) slot whose last label ended before
-    // this label begins. Selected stations always claim slot 0 even if it
-    // means visually overlapping a neighbor — the user is focused on it,
-    // they need to read it.
-    let slot = -1
-    if (isSelected) {
-      slot = 0
-    } else {
-      for (let i = 0; i < LABEL_SLOTS; i++) {
-        const last = slotRightEdge.get(`${s.lane}:${i}`) ?? -Infinity
-        if (last < labelLeft) {
-          slot = i
-          break
-        }
-      }
-    }
-    if (slot < 0) continue // Lane too crowded at this x — drop the label.
-    slotRightEdge.set(`${s.lane}:${slot}`, labelRight)
-
-    // Vertical layout per stop:
-    //   above lane:   [route?]  [subject]   ↓ tick ↓   ●
-    //   below lane:         ●   ↑ tick ↑   [subject]  [route?]
-    // Anchor `subjectY` to the SUBJECT line; the route (interchange-only)
-    // sits one line further from the rail.
-    const stagger = slot * LABEL_SLOT_STEP
-    const baseGap = above ? -22 - stagger : 24 + stagger
-    const subjectY = s.y + baseGap
-
-    // Leader tick from station edge to the nearer label baseline.
-    const tickFrom = above ? s.y - 9 : s.y + 9
-    const tickTo = above ? subjectY + 4 : subjectY - 11
-
-    // Route name (interchanges only) sits OUTSIDE the subject — one line
-    // further from the rail. 12px ≈ subject font-size + a touch of breathing
-    // room so the two strings don't visually fuse.
-    const ROUTE_GAP = 12
-    const routeY = routeName
-      ? above
-        ? subjectY - ROUTE_GAP
-        : subjectY + ROUTE_GAP
-      : null
-
-    els.push(
-      <g
-        key={`lbl-${s.hash}`}
-        opacity={dim ? 0.25 : 1}
-        pointerEvents="none"
-      >
-        <line
-          x1={s.x}
-          y1={tickFrom}
-          x2={s.x}
-          y2={tickTo}
-          stroke={s.color}
-          strokeWidth={1}
-          strokeOpacity={0.5}
-        />
-        {routeName && routeY !== null && (
-          <text
-            x={s.x}
-            y={routeY}
-            textAnchor="middle"
-            fontSize={10}
-            fontWeight={600}
-            fill={s.color}
-            style={{ letterSpacing: '0.01em' }}
-          >
-            {routeName}
-          </text>
-        )}
-        <text
-          x={s.x}
-          y={subjectY}
-          textAnchor="middle"
-          fontSize={11.5}
-          fontWeight={isSelected ? 600 : 500}
-          fill={isSelected ? LABEL_COLOR_SELECTED : LABEL_COLOR}
-        >
-          {subject}
-        </text>
-      </g>
-    )
-  }
-  return <g>{els}</g>
-}
 
 /**
  * Derive a short "route name" for an interchange station — the merged-in
  * branch name (e.g. "feature/auth"), if discoverable from the station's
  * refs or subject. Falls back to null if we can't infer one cleanly.
  */
-function deriveRouteName(s: MetroStation): string | null {
-  // Prefer a local branch ref present at the merge commit.
-  const localRef = s.refs.find((r) => r.fullName.startsWith('refs/heads/'))
-  if (localRef) return localRef.name
-  // Otherwise try to extract "Merge branch 'x'" / "Merge pull request #N from .../x"
-  const m = s.subject.match(/Merge (?:branch|pull request) [^']*'?([\w./-]+)'?/i)
-  if (m && m[1]) return m[1].split('/').pop() || null
-  return null
-}
 
 function truncate(s: string, n: number): string {
   if (s.length <= n) return s
@@ -1162,20 +1251,19 @@ function TagBadges({ layout, highlight, ciByCommit }: TagBadgesProps): JSX.Eleme
     const dim = !highlight(s.lane)
     const label = tag.name
     const ci = ciStateFor(s.hash, ciByCommit)
-    // Reserve room on the right edge for a CI mark when present.
     const ciPad = ci ? 16 : 0
     const width = Math.max(50, label.length * 6.8 + 18 + ciPad)
     const HEIGHT = 20
-    const above = s.lane <= (layout.laneCount - 1) / 2
-    const by = above ? s.y - HEIGHT - 14 : s.y + 14
-    const bx = s.x - width / 2
+    // In vertical layout, badge goes to the right of the station
+    const bx = s.x + 12
+    const by = s.y - HEIGHT / 2
     els.push(
       <g key={`tag-${s.hash}`} opacity={dim ? 0.35 : 1}>
         <line
-          x1={s.x}
+          x1={s.x + 8}
           y1={s.y}
-          x2={s.x}
-          y2={above ? by + HEIGHT : by}
+          x2={bx}
+          y2={s.y}
           stroke="#22c55e"
           strokeWidth={1.5}
           opacity={0.7}
@@ -1243,8 +1331,9 @@ function StationCiMarks({
   for (const s of layout.stations) {
     if (s.hash === headHash) continue
     if (s.hasTag) continue
-    const cx = s.x + 12
-    const cy = s.y - 12
+    // CI mark sits just above each station dot
+    const cx = s.x
+    const cy = s.y - 13
     const state = ciStateFor(s.hash, ciByCommit)
     if (state) {
       els.push(<CiMark key={`scim-${s.hash}`} state={state} cx={cx} cy={cy} r={6.5} />)
@@ -1280,125 +1369,6 @@ function StationCiMarks({
   return <g pointerEvents="none">{els}</g>
 }
 
-interface HeadBadgeProps {
-  layout: MetroLayout
-  status: { current: string | null; ahead: number; behind: number } | null
-  ciByCommit: Record<string, CommitChecksInfo | null>
-}
-
-/**
- * The big HEAD badge anchored at the HEAD station. Portrait-oriented
- * plaque with a filled terminus square at the top, branch name + "HEAD"
- * + relative date below, and a CI status mark in the top-right corner
- * when CI data is available. The plaque's bg is tinted with the lane's
- * color via a soft radial fade.
- */
-function HeadBadge({ layout, status, ciByCommit }: HeadBadgeProps): JSX.Element {
-  const head = layout.headStation
-  if (!head) return <></>
-  const name = status?.current ?? 'HEAD'
-  const w = 110
-  const h = 84
-  const bx = head.x + 18
-  const by = head.y - h / 2
-  const ci = ciStateFor(head.hash, ciByCommit)
-  const gradId = `head-fade-${head.hash.slice(0, 7)}`
-  return (
-    <g pointerEvents="none">
-      {/* Connector stub: casing + colored line, painting INTO the plaque
-          edge so it reads like the line terminates at a "wall". */}
-      <line
-        x1={head.x}
-        y1={head.y}
-        x2={bx + 4}
-        y2={head.y}
-        stroke={laneCasing(head.color)}
-        strokeWidth={9.5}
-        strokeLinecap="round"
-      />
-      <line
-        x1={head.x}
-        y1={head.y}
-        x2={bx + 4}
-        y2={head.y}
-        stroke={head.color}
-        strokeWidth={6.5}
-        strokeLinecap="round"
-      />
-
-      {/* Lane-tinted radial fade for the plaque bg. */}
-      <defs>
-        <radialGradient id={gradId} cx="50%" cy="0%" r="100%">
-          <stop offset="0%" stopColor={head.color} stopOpacity={0.22} />
-          <stop offset="100%" stopColor={head.color} stopOpacity={0.05} />
-        </radialGradient>
-      </defs>
-
-      <rect
-        x={bx}
-        y={by}
-        width={w}
-        height={h}
-        rx={11}
-        fill={`url(#${gradId})`}
-        stroke={head.color}
-        strokeWidth={1.8}
-      />
-
-      {/* Terminus square — clean filled marker at the top-centre. */}
-      <rect
-        x={bx + w / 2 - 11}
-        y={by + 10}
-        width={22}
-        height={22}
-        rx={4}
-        fill={head.color}
-        opacity={0.95}
-      />
-
-      {/* Branch name (bold, lane color) */}
-      <text
-        x={bx + w / 2}
-        y={by + 50}
-        textAnchor="middle"
-        fontSize={13}
-        fontWeight={700}
-        fill={head.color}
-      >
-        {truncate(name, 14)}
-      </text>
-
-      {/* HEAD label (lighter, lane color) */}
-      <text
-        x={bx + w / 2}
-        y={by + 64}
-        textAnchor="middle"
-        fontSize={10}
-        fontWeight={600}
-        fill={head.color}
-        opacity={0.75}
-        style={{ letterSpacing: '0.12em' }}
-      >
-        HEAD
-      </text>
-
-      {/* Relative date (muted) */}
-      <text
-        x={bx + w / 2}
-        y={by + 77}
-        textAnchor="middle"
-        fontSize={9}
-        fill="#9aa3b8"
-        className="font-mono"
-      >
-        {head.relativeDate}
-      </text>
-
-      {/* CI status mark in the top-right when available. */}
-      {ci && <CiMark state={ci} cx={bx + w - 11} cy={by + 11} r={7} />}
-    </g>
-  )
-}
 
 interface AheadBadgeProps {
   layout: MetroLayout
@@ -1417,8 +1387,9 @@ function AheadBadge({ layout, status }: AheadBadgeProps): JSX.Element {
         : `${status.behind} behind`
   const w = text.length * 7 + 28
   const h = 22
-  const bx = head.x - w - 24
-  const by = head.y - layout.laneHeight * 0.55
+  // Place above-left of HEAD station
+  const bx = head.x - w / 2
+  const by = head.y - layout.laneHeight - 2
   return (
     <g pointerEvents="none">
       <rect
@@ -1465,8 +1436,9 @@ function ConflictBadge({ layout, conflictCount }: ConflictBadgeProps): JSX.Eleme
   const label = `${conflictCount} conflict${conflictCount === 1 ? '' : 's'}`
   const w = label.length * 6.5 + 30
   const h = 22
+  // Below the head badge in vertical layout
   const bx = head.x + 18
-  const by = head.y + layout.laneHeight * 0.5 + 4
+  const by = head.y + layout.laneHeight * 0.6 + 4
   return (
     <g pointerEvents="none">
       <rect
@@ -1517,9 +1489,8 @@ interface StartMarkerProps {
 }
 
 /**
- * Western-terminus marker for the oldest commit. Renders a stacked
- * `START` label and an absolute month/day, with a short vertical leader
- * tick from the rail up to the label, in the station's lane color.
+ * Bottom-terminus marker for the oldest commit in vertical layout. Renders a
+ * short tick below the station with "START" and the absolute date.
  */
 function StartMarker({ layout, station }: StartMarkerProps): JSX.Element {
   const date = (() => {
@@ -1527,24 +1498,22 @@ function StartMarker({ layout, station }: StartMarkerProps): JSX.Element {
     if (Number.isNaN(d.getTime())) return station.relativeDate
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
   })()
-  // Above the rail: leader from rail to label baseline.
-  const labelTop = station.y - layout.laneHeight * 0.45 - 6
-  const tickTop = labelTop + 4
-  const tickBottom = station.y - 12
+  const tickTop = station.y + 10
+  const labelY = station.y + layout.laneHeight * 0.55 + 6
   return (
     <g pointerEvents="none">
       <line
         x1={station.x}
         y1={tickTop}
         x2={station.x}
-        y2={tickBottom}
+        y2={labelY - 4}
         stroke={station.color}
         strokeWidth={1.5}
         strokeOpacity={0.7}
       />
       <text
         x={station.x}
-        y={labelTop - 11}
+        y={labelY}
         textAnchor="middle"
         fontSize={10}
         fontWeight={700}
@@ -1555,7 +1524,7 @@ function StartMarker({ layout, station }: StartMarkerProps): JSX.Element {
       </text>
       <text
         x={station.x}
-        y={labelTop}
+        y={labelY + 13}
         textAnchor="middle"
         fontSize={11}
         fontWeight={500}
@@ -1569,48 +1538,6 @@ function StartMarker({ layout, station }: StartMarkerProps): JSX.Element {
 
 // ── Overlays (non-SVG) ─────────────────────────────────────────────────────
 
-/**
- * Inline SVG compass rose with a stylised "N" letter — replaces the
- * generic Lucide compass dial with something that reads like a Tube-map
- * cardinal indicator.
- */
-function CompassRose(): JSX.Element {
-  return (
-    <svg width={22} height={22} viewBox="0 0 22 22" fill="none">
-      <circle cx={11} cy={11} r={9.5} stroke="currentColor" strokeWidth={1.2} opacity={0.85} />
-      {/* Needle — filled triangle pointing up, hollow tail pointing down. */}
-      <path d="M11 4 L13 11 L11 11 L9 11 Z" fill="currentColor" opacity={0.95} />
-      <path d="M11 18 L13 11 L11 11 L9 11 Z" fill="currentColor" opacity={0.35} />
-      {/* "N" letter perched above the rose. */}
-      <text
-        x={11}
-        y={3}
-        textAnchor="middle"
-        fontSize={5}
-        fontWeight={800}
-        fill="currentColor"
-        style={{ letterSpacing: '0.05em' }}
-      >
-        N
-      </text>
-    </svg>
-  )
-}
-
-/** Compass + "Follow the flow" overlay anchored top-left. */
-function CompassOverlay(): JSX.Element {
-  return (
-    <div className="absolute top-3 left-3 z-20 flex items-center gap-2.5 bg-bg-panel/80 border border-line rounded-lg pl-2 pr-3 py-1.5 backdrop-blur shadow-lg">
-      <div className="w-9 h-9 rounded-full bg-bg-subtle border border-line flex items-center justify-center text-accent">
-        <CompassRose />
-      </div>
-      <div className="flex flex-col leading-tight">
-        <span className="text-[11px] uppercase tracking-wider text-muted">Legend</span>
-        <span className="text-[12px] text-text font-medium">Follow the flow →</span>
-      </div>
-    </div>
-  )
-}
 
 interface ZoomControlsProps {
   zoom: number

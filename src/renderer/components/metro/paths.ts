@@ -105,6 +105,60 @@ export function branchOffPath(
 }
 
 /**
+ * Vertical branch-off elbow: child (branch lane) → parent (trunk lane).
+ * Mirrors `branchOffPath` but for the vertical layout where:
+ *   - y axis is time (top = newest, bottom = oldest)
+ *   - x axis is lane position
+ *
+ * Geometry:
+ *
+ *   x1,y1 ●               (child station — branch lane, newer y)
+ *         │
+ *         │               (vertical run down the branch column)
+ *         │
+ *         ╰───────●       (rounded elbow turns horizontal, arrives at parent)
+ *                 x2,y2   (parent station — trunk lane, older y)
+ */
+export function branchOffPathVertical(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  rowHeight: number,
+  _laneWidth: number
+): string {
+  const dy = y2 - y1   // positive: parent is below child (older)
+  const dx = x2 - x1   // positive = moving right, negative = moving left
+  const signX = dx === 0 ? 1 : Math.sign(dx)
+
+  let r = Math.min(MAX_CORNER_R, rowHeight * 0.4)
+  r = Math.min(r, Math.abs(dx) * 0.45, dy * 0.45)
+  r = Math.max(MIN_CORNER_R, r)
+
+  const minRiserY = y1 + r
+  const maxRiserY = y2 - r - RISER_GAP
+
+  if (minRiserY >= maxRiserY) {
+    // Tight space — smooth cubic fallback
+    const c1Y = y1 + 0.18 * dy
+    const c2Y = y1 + 0.82 * dy
+    return `M ${x1} ${y1} C ${x1} ${c1Y}, ${x2} ${c2Y}, ${x2} ${y2}`
+  }
+
+  const targetRiserY = y2 - r - RISER_GAP
+  const riserY = Math.max(minRiserY, Math.min(maxRiserY, targetRiserY))
+
+  return (
+    `M ${x1} ${y1} ` +
+    `L ${x1} ${riserY - r} ` +
+    `Q ${x1} ${riserY}, ${x1 + signX * r} ${riserY} ` +
+    `L ${x2 - signX * r} ${riserY} ` +
+    `Q ${x2} ${riserY}, ${x2} ${riserY + r} ` +
+    `L ${x2} ${y2}`
+  )
+}
+
+/**
  * Build a continuous polyline path through a sorted list of points. Used to
  * render an entire lane as one `<path>` so the rail reads as a single Tube
  * line rather than a chain of stitched segments.

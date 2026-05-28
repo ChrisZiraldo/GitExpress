@@ -8,7 +8,6 @@ import {
   TramFront,
   CheckCircle2,
   XCircle,
-  TriangleAlert,
   GitMerge,
   GitPullRequest,
   EyeOff,
@@ -990,7 +989,6 @@ export function RefsSidebar(): JSX.Element {
               <LegendItem icon={<CheckCircle2 size={11} className="text-success" />} label="CI Passing" />
               <LegendItem icon={<Flag size={11} className="text-success" />} label="Release / Tag" />
               <LegendItem icon={<XCircle size={11} className="text-danger" />} label="CI Failing" />
-              <LegendItem icon={<TriangleAlert size={11} className="text-warn" />} label="Conflicts" />
               <LegendItem icon={<EyeOff size={11} className="text-muted" />} label="Stale Branch" />
             </div>
           </Section>
@@ -1260,7 +1258,7 @@ function BranchLineRow({
   onContextMenu,
   onCheckout
 }: BranchLineRowProps): JSX.Element {
-  const { ref, color, aheadOfTrunk, trunkName, status } = line
+  const { ref, color, aheadOfTrunk, trunkName } = line
   // A row in a multi-selection should not be dimmed even if the map's
   // single-branch highlight points elsewhere — multi-select intent
   // outranks the highlight dim.
@@ -1290,7 +1288,7 @@ function BranchLineRow({
       onClick={onClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
-      className={'group px-3 py-1 cursor-pointer flex items-center gap-2 ' + rowBg}
+      className={'group relative px-3 py-1 cursor-pointer flex items-center gap-2 ' + rowBg}
       style={{ opacity: dim ? 0.45 : 1 }}
       title={ref.fullName + titleSuffix}
     >
@@ -1311,8 +1309,6 @@ function BranchLineRow({
       <span
         className="text-[10px] font-mono px-1 rounded shrink-0"
         style={{
-          // Match the lane's color on the map: bg at ~20% alpha, text full
-          // strength. Ties the sidebar visually to the metro lines.
           backgroundColor: `${color}33`,
           color
         }}
@@ -1320,11 +1316,10 @@ function BranchLineRow({
       >
         {trunkName ? aheadOfTrunk : '—'}
       </span>
-      <StatusIcon status={status} />
       {!ref.current && (
         <button
           onClick={(e) => { e.stopPropagation(); onCheckout() }}
-          className="opacity-0 group-hover:opacity-100 text-[10px] text-accent hover:text-accent-hover shrink-0"
+          className="absolute right-2 opacity-0 group-hover:opacity-100 text-[10px] text-accent hover:text-accent-hover bg-bg-panel px-1 rounded"
         >
           Checkout
         </button>
@@ -1333,22 +1328,6 @@ function BranchLineRow({
   )
 }
 
-function StatusIcon({ status }: { status: BranchLineStatus['status'] }): JSX.Element {
-  switch (status) {
-    case 'passing':
-      return <CheckCircle2 size={11} className="text-success shrink-0" />
-    case 'failing':
-      return <XCircle size={11} className="text-danger shrink-0" />
-    case 'open-pr':
-      return <TramFront size={11} className="text-accent shrink-0" />
-    case 'stale':
-      return <EyeOff size={11} className="text-muted shrink-0" />
-    case 'conflict':
-      return <TriangleAlert size={11} className="text-warn shrink-0" />
-    default:
-      return <Circle size={11} className="text-muted shrink-0" />
-  }
-}
 
 interface RemoteRowProps {
   refData: Ref

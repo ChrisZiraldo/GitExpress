@@ -354,7 +354,9 @@ export interface MetroLaneLabel {
   lane: number
   name: string
   color: string
-  /** y coordinate of the lane (horizontal layout) */
+  /** x coordinate of the lane column (vertical layout) */
+  x: number
+  /** @deprecated kept for legacy callers; same value as x */
   y: number
 }
 
@@ -362,8 +364,9 @@ export interface MetroTerminal {
   lane: number
   name: string
   color: string
-  /** x coordinate where the badge is anchored (just left of the lane's leftmost station) */
+  /** x coordinate of the lane column center */
   x: number
+  /** y coordinate — top of the lane (just above the newest station) */
   y: number
   /** True if the branch has no upstream / appears stale. Renderer should dash its line. */
   stale: boolean
@@ -402,8 +405,10 @@ export interface MetroLayout {
   tipLane: Map<string, number>
   /** Lane index of the trunk ("main") in the post-remap space. */
   mainLane: number
-  /** y coordinate of the trunk lane — used for initial scroll centering. */
+  /** x coordinate of the trunk lane column — used for initial horizontal scroll centering. */
   mainLaneY: number
+  /** @deprecated same as mainLaneY (kept for legacy callers) */
+  mainLaneX: number
   /** Local branch names that were filtered out by `showMerged`/`showStale`. */
   hiddenLocalNames: Set<string>
 }
@@ -433,10 +438,18 @@ export interface MetroLayoutOpts {
 }
 
 /**
- * Computes a horizontal metro-map layout where:
- *   - x axis is time (oldest → newest, left → right). graph[0] (newest)
- *     lives at the RIGHTMOST column.
- *   - y axis is branch lanes stacked top-to-bottom.
+ * Computes a VERTICAL metro-map layout where:
+ *   - y axis is time (newest → oldest, top → bottom). graph[0] (newest)
+ *     lives at the TOP row.
+ *   - x axis is branch lanes arranged left-to-right.
+ *   - Commit message labels are rendered to the right of the lane columns.
+ *
+ * Field repurposing vs the old horizontal layout:
+ *   colWidth   → horizontal width of each lane column
+ *   laneHeight → vertical height of each commit row
+ *   mainLaneY  → x center of the main lane (for horizontal scroll centering)
+ *   headLaneY  → x center of the HEAD lane
+ *   laneLabels[*].y → x center of that lane column (= .x)
  */
 export function computeMetroLayout(
   graphIn: GraphCommit[],
@@ -444,11 +457,11 @@ export function computeMetroLayout(
   currentBranch: string | null,
   opts: MetroLayoutOpts = {}
 ): MetroLayout {
-  const colWidth = opts.colWidth ?? 52
-  const laneHeight = opts.laneHeight ?? 64
-  const leftPad = opts.leftPad ?? 96
-  const rightPad = opts.rightPad ?? 200
-  const topPad = opts.topPad ?? 48
+  const colWidth = opts.colWidth ?? 52   // lane column width (horizontal)
+  const laneHeight = opts.laneHeight ?? 36 // commit row height (vertical)
+  const leftPad = opts.leftPad ?? 180     // room for branch name pills on the left
+  const rightPad = opts.rightPad ?? 16
+  const topPad = opts.topPad ?? 20
   const bottomPad = opts.bottomPad ?? 60
   const showMerged = opts.showMerged ?? true
   const showStale = opts.showStale ?? true
@@ -563,10 +576,9 @@ export function computeMetroLayout(
 
   const laneLayout = { rows: remappedRows, width: oldLaneCount }
 
-  // Oldest (last graph row) at the LEFT; newest (row 0) at the RIGHT.
-  const rx = (rowIdx: number): number =>
-    leftPad + (cols - 1 - rowIdx) * colWidth + colWidth / 2
-  const ly = (lane: number): number => topPad + lane * laneHeight + laneHeight / 2
+  // Newest (row 0) at the TOP; lanes arranged left → right.
+  const ry = (rowIdx: number): number => topPad + rowIdx * laneHeight + laneHeight / 2
+  const lx = (lane: number): number => leftPad + lane * colWidth + colWidth / 2
 
   const headRef = currentBranch ? refs.local.find((r) => r.name === currentBranch) : null
   const headHash = headRef?.hash ?? graph[0]?.hash ?? null
@@ -578,8 +590,8 @@ export function computeMetroLayout(
   for (let i = 0; i < laneLayout.rows.length; i++) {
     const row = laneLayout.rows[i]
     const { commit, lane, parentLanes, mergeFrom } = row
-    const x = rx(i)
-    const y = ly(lane)
+    const x = lx(lane)
+    const y = ry(i)
     const stationRefs = refsByCommit.get(commit.hash) ?? []
     const hasTag = stationRefs.some((r) => r.fullName.startsWith('refs/tags/'))
     const isHead = commit.hash === headHash
@@ -678,16 +690,28 @@ export function computeMetroLayout(
   for (const [lane] of laneFirstRow.entries()) {
     const name = laneDisplayName.get(lane)
     if (!name) continue
-    laneLabels.push({
-      lane,
-      name,
-      color: laneColor(lane),
-      y: ly(lane)
-    })
+    const cx = lx(lane)
+    laneLabels.push({ lane, name, color: laneColor(lane), x: cx, y: cx })
   }
   laneLabels.sort((a, b) => a.lane - b.lane)
 
-  // Compute the leftmost x per lane (i.e. the oldest row index where the lane is live)
+  // Deduplicate: local branch "foo" and its remote tracking ref "origin/foo"
+  // both resolve to the display name "foo" via pickLaneBranchName. Keep only
+  // the first occurrence (lowest lane index, which is normally the local branch).
+  {
+    const seenNames = new Set<string>()
+    let i = 0
+    while (i < laneLabels.length) {
+      if (seenNames.has(laneLabels[i].name)) {
+        laneLabels.splice(i, 1)
+      } else {
+        seenNames.add(laneLabels[i].name)
+        i++
+      }
+    }
+  }
+
+  // Compute the last (oldest) row index per lane
   const laneMaxRow = new Map<number, number>()
   for (let i = 0; i < laneLayout.rows.length; i++) {
     const row = laneLayout.rows[i]
@@ -719,24 +743,27 @@ export function computeMetroLayout(
 
   const terminals: MetroTerminal[] = []
   for (const label of laneLabels) {
-    const maxRow = laneMaxRow.get(label.lane) ?? 0
-    const xLeftmost = rx(maxRow)
+    const firstRow = laneFirstRow.get(label.lane) ?? 0
     terminals.push({
       lane: label.lane,
       name: label.name,
       color: label.color,
-      x: xLeftmost - colWidth * 0.55,
-      y: label.y,
+      x: lx(label.lane),
+      // Anchor just above the newest (top) station in this lane
+      y: ry(firstRow) - laneHeight * 0.55,
       stale: staleLanes.has(label.lane)
     })
   }
 
   const tagStations = stations.filter((s) => s.hasTag)
   const headStation = stations.find((s) => s.isHead) ?? null
-  const headLaneY = headStation ? headStation.y : null
+  // headLaneY now stores the x center of the HEAD lane (for horizontal centering)
+  const headLaneY = headStation ? headStation.x : null
 
-  const width = leftPad + cols * colWidth + rightPad
-  const height = topPad + laneCount * laneHeight + bottomPad
+  // Label area to the right of lane columns — enough room for commit subjects
+  const LABEL_AREA = 280
+  const width = leftPad + laneCount * colWidth + LABEL_AREA + rightPad
+  const height = topPad + cols * laneHeight + bottomPad
 
   const tipLane = new Map<string, number>()
   for (const s of stations) tipLane.set(s.hash, s.lane)
@@ -762,7 +789,8 @@ export function computeMetroLayout(
     headLaneY,
     tipLane,
     mainLane,
-    mainLaneY: ly(mainLane),
+    mainLaneY: lx(mainLane),
+    mainLaneX: lx(mainLane),
     hiddenLocalNames
   }
 }
