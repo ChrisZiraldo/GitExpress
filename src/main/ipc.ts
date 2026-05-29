@@ -3,10 +3,16 @@ import { Channels } from '@shared/channels'
 import type {
   BranchCreateOptions,
   CommitInput,
+  ConflictVersions,
   DiffOptions,
   FileChangeType,
+  GitignoreReadResult,
+  PrCreateOptions,
+  PrReviewOptions,
   PullOptions,
   PushOptions,
+  RebaseStatus,
+  RebasePlanEntry,
   RecentRepo,
   Result,
   SettingsUpdate,
@@ -27,9 +33,10 @@ import {
   createBranchFromCommit,
   deleteBranch,
   listBranches,
-  resetToRemote
+  resetToRemote,
+  resetHard
 } from './git/branch'
-import { graphLog, recentCommits } from './git/log'
+import { graphLog, recentCommits, searchLog } from './git/log'
 import { listRefs } from './git/refs'
 import {
   listStashes,
@@ -45,7 +52,31 @@ import { resolveRepoRoot } from './git/repo'
 import { createTag, deleteTag } from './git/tag'
 import { cherryPick, revert, resetToCommit, type ResetMode } from './git/commit-ops'
 import { isGhAvailable } from './gh/runner'
-import { getChecksForCommit, getPullRequestForBranch, listPullRequests, rerunRun, rerunLatest } from './gh/pr'
+import {
+  createPullRequest,
+  getChecksForCommit,
+  getPrDiff,
+  getPullRequestForBranch,
+  listPullRequests,
+  rerunLatest,
+  rerunRun,
+  reviewPullRequest
+} from './gh/pr'
+import { getHeadSha, undoTo } from './git/reflog'
+import { appendGitignore, readGitignore, writeGitignore } from './git/gitignore'
+import {
+  getConflictVersions,
+  mergeAbort,
+  mergeContinue,
+  resolveConflict,
+  useConflictSide
+} from './git/conflict'
+import {
+  getRebaseStatus,
+  rebaseAbort,
+  rebaseContinue,
+  startRebase
+} from './git/rebase'
 import { join } from 'node:path'
 import {
   getLastRepoPath,
@@ -55,6 +86,7 @@ import {
   removeRecent,
   saveCommitMessageRules,
   saveCursorApiKey,
+  saveGpgSign,
   saveLastRepoPath
 } from './store'
 import { buildAppMenu } from './menu'
@@ -328,6 +360,11 @@ export function registerIpc(): void {
     return resetToRemote(cwd)
   })
 
+  ipcMain.handle(Channels.BranchResetHard, async (_e, cwd: string) => {
+    if (!cwd) return fail('No repository selected')
+    return resetHard(cwd)
+  })
+
   ipcMain.handle(
     Channels.TagCreate,
     async (_e, cwd: string, name: string, hash: string, message?: string) => {
@@ -453,6 +490,9 @@ export function registerIpc(): void {
     if (typeof update.commitMessageRules === 'string') {
       saveCommitMessageRules(update.commitMessageRules)
     }
+    if (typeof update.gpgSign === 'boolean') {
+      saveGpgSign(update.gpgSign)
+    }
     return { ok: true as const, data: getSettingsView() }
   })
 
@@ -460,4 +500,135 @@ export function registerIpc(): void {
     if (!cwd) return fail('No repository selected')
     return generateCommitMessage(cwd)
   })
+
+  // ── Undo / reflog ──────────────────────────────────────────────────────
+
+  ipcMain.handle(Channels.GitHeadSha, async (_e, cwd: string) => {
+    if (!cwd) return fail('No repository selected')
+    return getHeadSha(cwd)
+  })
+
+  ipcMain.handle(Channels.GitUndo, async (_e, cwd: string, sha: string) => {
+    if (!cwd) return fail('No repository selected')
+    if (!sha) return fail('SHA required')
+    return undoTo(cwd, sha)
+  })
+
+  // ── .gitignore ─────────────────────────────────────────────────────────
+
+  ipcMain.handle(Channels.GitignoreRead, async (_e, cwd: string): Promise<Result<GitignoreReadResult>> => {
+    if (!cwd) return fail('No repository selected')
+    return readGitignore(cwd)
+  })
+
+  ipcMain.handle(Channels.GitignoreWrite, async (_e, cwd: string, content: string) => {
+    if (!cwd) return fail('No repository selected')
+    if (typeof content !== 'string') return fail('Content required')
+    return writeGitignore(cwd, content)
+  })
+
+  ipcMain.handle(Channels.GitignoreAppend, async (_e, cwd: string, pattern: string) => {
+    if (!cwd) return fail('No repository selected')
+    if (!pattern) return fail('Pattern required')
+    return appendGitignore(cwd, pattern)
+  })
+
+  // ── PR creation / review / diff ────────────────────────────────────────
+
+  ipcMain.handle(Channels.PrCreate, async (_e, cwd: string, opts: PrCreateOptions) => {
+    if (!cwd) return fail('No repository selected')
+    return createPullRequest(cwd, opts)
+  })
+
+  ipcMain.handle(
+    Channels.PrReview,
+    async (_e, cwd: string, prNumber: number, opts: PrReviewOptions) => {
+      if (!cwd) return fail('No repository selected')
+      if (!prNumber) return fail('PR number required')
+      return reviewPullRequest(cwd, prNumber, opts)
+    }
+  )
+
+  ipcMain.handle(Channels.PrDiff, async (_e, cwd: string, prNumber: number) => {
+    if (!cwd) return fail('No repository selected')
+    if (!prNumber) return fail('PR number required')
+    return getPrDiff(cwd, prNumber)
+  })
+
+  // ── Conflict resolution ────────────────────────────────────────────────
+
+  ipcMain.handle(
+    Channels.ConflictVersions,
+    async (_e, cwd: string, path: string): Promise<Result<ConflictVersions>> => {
+      if (!cwd) return fail('No repository selected')
+      if (!path) return fail('File path required')
+      return getConflictVersions(cwd, path)
+    }
+  )
+
+  ipcMain.handle(
+    Channels.ConflictResolve,
+    async (_e, cwd: string, path: string, content: string) => {
+      if (!cwd) return fail('No repository selected')
+      if (!path) return fail('File path required')
+      return resolveConflict(cwd, path, content)
+    }
+  )
+
+  ipcMain.handle(
+    Channels.ConflictUseSide,
+    async (_e, cwd: string, path: string, side: 'ours' | 'theirs') => {
+      if (!cwd) return fail('No repository selected')
+      if (!path) return fail('File path required')
+      return useConflictSide(cwd, path, side)
+    }
+  )
+
+  ipcMain.handle(Channels.MergeContinue, async (_e, cwd: string) => {
+    if (!cwd) return fail('No repository selected')
+    return mergeContinue(cwd)
+  })
+
+  ipcMain.handle(Channels.MergeAbort, async (_e, cwd: string) => {
+    if (!cwd) return fail('No repository selected')
+    return mergeAbort(cwd)
+  })
+
+  // ── Interactive rebase ─────────────────────────────────────────────────
+
+  ipcMain.handle(
+    Channels.RebaseStart,
+    async (_e, cwd: string, ontoSha: string, plan: RebasePlanEntry[]) => {
+      if (!cwd) return fail('No repository selected')
+      if (!ontoSha) return fail('Base SHA required')
+      if (!Array.isArray(plan) || plan.length === 0) return fail('Rebase plan required')
+      return startRebase(cwd, ontoSha, plan)
+    }
+  )
+
+  ipcMain.handle(Channels.RebaseStatus, async (_e, cwd: string): Promise<Result<RebaseStatus>> => {
+    if (!cwd) return fail('No repository selected')
+    return getRebaseStatus(cwd)
+  })
+
+  ipcMain.handle(Channels.RebaseContinue, async (_e, cwd: string) => {
+    if (!cwd) return fail('No repository selected')
+    return rebaseContinue(cwd)
+  })
+
+  ipcMain.handle(Channels.RebaseAbort, async (_e, cwd: string) => {
+    if (!cwd) return fail('No repository selected')
+    return rebaseAbort(cwd)
+  })
+
+  // ── Log search ─────────────────────────────────────────────────────────
+
+  ipcMain.handle(
+    Channels.LogSearch,
+    async (_e, cwd: string, query: string, limit?: number) => {
+      if (!cwd) return fail('No repository selected')
+      if (!query) return { ok: true as const, data: [] }
+      return searchLog(cwd, query, typeof limit === 'number' ? limit : 200)
+    }
+  )
 }

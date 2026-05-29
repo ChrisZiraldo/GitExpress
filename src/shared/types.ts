@@ -64,15 +64,64 @@ export interface Commit {
 export interface CommitInput {
   message: string
   description?: string
+  /** When true, amends the most recent commit instead of creating a new one. */
+  amend?: boolean
+}
+
+export interface PrCreateOptions {
+  base: string
+  head: string
+  title: string
+  body?: string
+  draft?: boolean
+}
+
+export interface PrReviewOptions {
+  event: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'
+  body?: string
+}
+
+export interface ConflictVersions {
+  path: string
+  base: string
+  ours: string
+  theirs: string
+}
+
+export type RebaseAction = 'pick' | 'squash' | 'fixup' | 'drop' | 'reword'
+
+export interface RebasePlanEntry {
+  sha: string
+  action: RebaseAction
+  subject?: string
+}
+
+export interface RebaseStatus {
+  inProgress: boolean
+  head: string | null
+  onto: string | null
+}
+
+export interface GitignoreReadResult {
+  content: string
+  path: string
 }
 
 export interface PullOptions {
   rebase?: boolean
+  /** Pull a specific branch instead of the current one. */
+  branch?: string
+  /** Remote to pull from (default: 'origin'). */
+  remote?: string
 }
 
 export interface PushOptions {
   setUpstream?: boolean
   force?: boolean
+  /** Push a specific branch instead of the current one. */
+  branch?: string
+  /** Remote to push to (default: 'origin'). */
+  remote?: string
 }
 
 export interface BranchCreateOptions {
@@ -216,6 +265,8 @@ export interface CommitChecksInfo {
 export interface SettingsView {
   cursorApiKeySet: boolean
   commitMessageRules: string
+  /** Whether to GPG-sign commits. Defaults to false so unsigned commits work out of the box. */
+  gpgSign: boolean
 }
 
 export interface SettingsUpdate {
@@ -225,6 +276,7 @@ export interface SettingsUpdate {
    */
   cursorApiKey?: string | null
   commitMessageRules?: string
+  gpgSign?: boolean
 }
 
 export interface GeneratedCommitMessage {

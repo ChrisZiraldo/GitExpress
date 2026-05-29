@@ -6,6 +6,7 @@ import type {
   CommitDetail,
   GraphCommit,
   PullRequestInfo,
+  RebasePlanEntry,
   RecentRepo,
   RefSet,
   Stash,
@@ -21,6 +22,13 @@ export interface ToastEntry {
   id: number
   kind: 'success' | 'error' | 'info'
   text: string
+  /** Optional undo action shown as a button in the toast. */
+  onUndo?: () => void
+}
+
+export interface UndoEntry {
+  label: string
+  beforeSha: string
 }
 
 const EMPTY_REFS: RefSet = { local: [], remote: [], tags: [] }
@@ -76,6 +84,13 @@ interface RepoState {
   ciByCommit: Record<string, CommitChecksInfo | null>
   ciCommitLoading: Record<string, boolean>
   ciAvailable: boolean | null
+  // Undo stack — captures HEAD SHA before each destructive operation
+  undoStack: UndoEntry[]
+  // Commit search query
+  commitQuery: string
+  // Interactive rebase
+  rebasePlan: RebasePlanEntry[]
+  rebaseInProgress: boolean
   setActiveRepo: (repo: RecentRepo | null) => void
   setRecents: (recents: RecentRepo[]) => void
   setStatus: (status: StatusResult | null) => void
@@ -103,8 +118,13 @@ interface RepoState {
   setCiAvailable: (available: boolean) => void
   clearCi: () => void
   refreshSignal: () => void
-  pushToast: (kind: ToastEntry['kind'], text: string) => void
+  pushToast: (kind: ToastEntry['kind'], text: string, onUndo?: () => void) => void
   dismissToast: (id: number) => void
+  pushUndoEntry: (entry: UndoEntry) => void
+  popUndoEntry: () => UndoEntry | undefined
+  setCommitQuery: (query: string) => void
+  setRebasePlan: (plan: RebasePlanEntry[]) => void
+  setRebaseInProgress: (inProgress: boolean) => void
 }
 
 let toastSeq = 0
@@ -188,6 +208,10 @@ export const useRepo = create<RepoState>((set) => ({
   ciByCommit: {},
   ciCommitLoading: {},
   ciAvailable: null,
+  undoStack: [],
+  commitQuery: '',
+  rebasePlan: [],
+  rebaseInProgress: false,
   setActiveRepo: (repo) =>
     set({
       activeRepo: repo,
@@ -206,7 +230,11 @@ export const useRepo = create<RepoState>((set) => ({
       ciByBranch: {},
       ciLoading: {},
       ciByCommit: {},
-      ciCommitLoading: {}
+      ciCommitLoading: {},
+      undoStack: [],
+      commitQuery: '',
+      rebasePlan: [],
+      rebaseInProgress: false
     }),
   setRecents: (recents) => set({ recents }),
   setStatus: (status) => set({ status }),
@@ -272,18 +300,32 @@ export const useRepo = create<RepoState>((set) => ({
     }),
   refreshSignal: () =>
     set((state) => ({ refreshVersion: state.refreshVersion + 1 })),
-  pushToast: (kind, text) =>
+  pushToast: (kind, text, onUndo) =>
     set((state) => {
       const id = ++toastSeq
-      const entry: ToastEntry = { id, kind, text }
+      const entry: ToastEntry = { id, kind, text, onUndo }
       setTimeout(
         () => {
           useRepo.getState().dismissToast(id)
         },
-        kind === 'error' ? 6000 : 3000
+        kind === 'error' ? 6000 : (onUndo ? 8000 : 3000)
       )
       return { toasts: [...state.toasts, entry] }
     }),
   dismissToast: (id) =>
-    set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }))
+    set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
+  pushUndoEntry: (entry) =>
+    set((state) => ({ undoStack: [...state.undoStack.slice(-19), entry] })),
+  popUndoEntry: () => {
+    let popped: UndoEntry | undefined
+    useRepo.setState((state) => {
+      const stack = [...state.undoStack]
+      popped = stack.pop()
+      return { undoStack: stack }
+    })
+    return popped
+  },
+  setCommitQuery: (query) => set({ commitQuery: query }),
+  setRebasePlan: (plan) => set({ rebasePlan: plan }),
+  setRebaseInProgress: (inProgress) => set({ rebaseInProgress: inProgress })
 }))

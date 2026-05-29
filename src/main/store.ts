@@ -21,6 +21,8 @@ interface PersistedSettings {
    */
   cursorApiKeyEnc: string
   commitMessageRules: string
+  /** Whether to GPG-sign commits. Defaults to false. */
+  gpgSign: boolean
 }
 
 interface Schema {
@@ -36,7 +38,7 @@ const store = new Store<Schema>({
     recents: [],
     windowBounds: { width: 1280, height: 820 },
     lastRepoPath: '',
-    settings: { cursorApiKeyEnc: '', commitMessageRules: DEFAULT_COMMIT_RULES }
+    settings: { cursorApiKeyEnc: '', commitMessageRules: DEFAULT_COMMIT_RULES, gpgSign: false }
   },
   migrations: {
     '0.1.0': (s) => {
@@ -105,10 +107,11 @@ function readSettings(): PersistedSettings {
   if (cur && typeof cur === 'object') {
     return {
       cursorApiKeyEnc: cur.cursorApiKeyEnc ?? '',
-      commitMessageRules: cur.commitMessageRules ?? DEFAULT_COMMIT_RULES
+      commitMessageRules: cur.commitMessageRules ?? DEFAULT_COMMIT_RULES,
+      gpgSign: cur.gpgSign ?? false
     }
   }
-  return { cursorApiKeyEnc: '', commitMessageRules: DEFAULT_COMMIT_RULES }
+  return { cursorApiKeyEnc: '', commitMessageRules: DEFAULT_COMMIT_RULES, gpgSign: false }
 }
 
 function writeSettings(next: PersistedSettings): void {
@@ -120,7 +123,8 @@ export function getSettingsView(): SettingsView {
   const s = readSettings()
   return {
     cursorApiKeySet: s.cursorApiKeyEnc.length > 0,
-    commitMessageRules: s.commitMessageRules
+    commitMessageRules: s.commitMessageRules,
+    gpgSign: s.gpgSign
   }
 }
 
@@ -165,4 +169,13 @@ export function saveCommitMessageRules(rules: string): void {
 
 export function getCommitMessageRules(): string {
   return readSettings().commitMessageRules
+}
+
+export function getGpgSign(): boolean {
+  return readSettings().gpgSign
+}
+
+export function saveGpgSign(value: boolean): void {
+  const s = readSettings()
+  writeSettings({ ...s, gpgSign: value })
 }

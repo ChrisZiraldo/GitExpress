@@ -529,6 +529,20 @@ export function RefsSidebar(): JSX.Element {
       y: e.clientY,
       items: [
         { label: 'Checkout', onClick: () => checkoutLocal(ref), disabled: !!ref.current },
+        { type: 'separator' },
+        {
+          label: `Push ${ref.name}`,
+          onClick: () => runWithBusy(`Push ${ref.name}`, () =>
+            window.git.remote.push(activeRepo!.path, { branch: ref.name })
+          )
+        },
+        {
+          label: `Pull ${ref.name}`,
+          onClick: () => runWithBusy(`Pull ${ref.name}`, () =>
+            window.git.remote.pull(activeRepo!.path, { branch: ref.name })
+          )
+        },
+        { type: 'separator' },
         { label: 'Highlight on map', onClick: () => setHighlightedBranchId(ref.fullName) },
         {
           label: 'Clear highlight',

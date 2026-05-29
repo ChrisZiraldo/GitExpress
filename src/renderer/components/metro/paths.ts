@@ -159,6 +159,45 @@ export function branchOffPathVertical(
 }
 
 /**
+ * Merge-connector path: from the merge commit on the trunk to the branch tip.
+ *
+ * Unlike `branchOffPathVertical` (which runs its riser along the child/trunk
+ * column), this function runs the riser along the BRANCH column so the branch
+ * lane appears visually anchored to the merge commit at the top.
+ *
+ * Geometry:
+ *
+ *   x1,y1 ●───────╮          (merge commit — trunk lane, newer/smaller y)
+ *                  │
+ *                  │          (riser down the branch column)
+ *                  │
+ *          x2,y2 ●            (branch tip — branch lane, older/larger y)
+ */
+export function mergeConnectorPath(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  rowHeight: number,
+  _laneWidth: number
+): string {
+  const dy = y2 - y1
+  const dx = x2 - x1
+  const signX = dx === 0 ? 1 : Math.sign(dx)
+
+  let r = Math.min(MAX_CORNER_R, rowHeight * 0.4)
+  r = Math.min(r, Math.abs(dx) * 0.45, dy * 0.45)
+  r = Math.max(MIN_CORNER_R, r)
+
+  return (
+    `M ${x1} ${y1} ` +
+    `L ${x2 - signX * r} ${y1} ` +          // horizontal to near the branch column
+    `Q ${x2} ${y1}, ${x2} ${y1 + r} ` +     // rounded corner turning downward
+    `L ${x2} ${y2}`                           // riser down the branch column to tip
+  )
+}
+
+/**
  * Build a continuous polyline path through a sorted list of points. Used to
  * render an entire lane as one `<path>` so the rail reads as a single Tube
  * line rather than a chain of stitched segments.

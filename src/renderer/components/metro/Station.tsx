@@ -6,6 +6,7 @@ interface StationProps {
   selected: boolean
   dimmed: boolean
   onClick: (e: React.MouseEvent) => void
+  onDoubleClick: (e: React.MouseEvent) => void
   onContextMenu: (e: React.MouseEvent) => void
   onMouseEnter: (e: React.MouseEvent) => void
   onMouseLeave: () => void
@@ -30,6 +31,7 @@ export function Station({
   selected,
   dimmed,
   onClick,
+  onDoubleClick,
   onContextMenu,
   onMouseEnter,
   onMouseLeave
@@ -54,6 +56,7 @@ export function Station({
     <g
       style={{ cursor: 'pointer', opacity }}
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}

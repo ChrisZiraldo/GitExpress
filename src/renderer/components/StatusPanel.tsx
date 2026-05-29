@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRepo } from '../store/useRepo'
 import type { FileChangeType, FileEntry } from '@shared/types'
 import { ContextMenu, type MenuItem } from './ContextMenu'
+import { ConflictEditor } from './ConflictEditor'
 
 interface Props {
   onRefresh: () => Promise<void>
@@ -39,6 +40,17 @@ export function StatusPanel({ onRefresh }: Props): JSX.Element {
 
   // Track which file key (path:staged) is in pending-confirm state for discard
   const [pendingDiscard, setPendingDiscard] = useState<string | null>(null)
+  const [conflictFile, setConflictFile] = useState<string | null>(null)
+
+  // Listen for conflict-badge click from the metro map
+  useEffect(() => {
+    const handler = (): void => {
+      const first = useRepo.getState().status?.conflicted[0]?.path
+      if (first) setConflictFile(first)
+    }
+    window.addEventListener('gitmetro:open-conflicts', handler)
+    return () => window.removeEventListener('gitmetro:open-conflicts', handler)
+  }, [])
   // Right-click context menu state
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
 
@@ -137,21 +149,77 @@ export function StatusPanel({ onRefresh }: Props): JSX.Element {
       {
         label: 'Copy full path',
         onClick: () => navigator.clipboard.writeText(fullPath)
+      },
+      { type: 'separator' },
+      {
+        label: 'Add to .gitignore',
+        onClick: async () => {
+          const res = await window.git.gitignore.append(activeRepo.path, entry.path)
+          if (res.ok) {
+            useRepo.getState().pushToast('success', `Added ${entry.path} to .gitignore`)
+            useRepo.getState().refreshSignal()
+          } else {
+            useRepo.getState().pushToast('error', `Failed: ${res.stderr}`)
+          }
+        }
       }
     ]
     setCtxMenu({ x: e.clientX, y: e.clientY, items })
   }
 
+  // Merge continue / abort helpers
+  const mergeContinue = async (): Promise<void> => {
+    if (!activeRepo) return
+    const res = await window.git.conflict.mergeContinue(activeRepo.path)
+    if (res.ok) { useRepo.getState().pushToast('success', 'Merge continued'); useRepo.getState().refreshSignal() }
+    else useRepo.getState().pushToast('error', `Merge continue failed: ${res.stderr}`)
+  }
+  const mergeAbort = async (): Promise<void> => {
+    if (!activeRepo) return
+    const res = await window.git.conflict.mergeAbort(activeRepo.path)
+    if (res.ok) { useRepo.getState().pushToast('info', 'Merge aborted'); useRepo.getState().refreshSignal() }
+    else useRepo.getState().pushToast('error', `Merge abort failed: ${res.stderr}`)
+  }
+
+  if (conflictFile) {
+    return (
+      <div className="flex-1 min-h-0">
+        <ConflictEditor
+          filePath={conflictFile}
+          onClose={() => setConflictFile(null)}
+          onResolved={() => setConflictFile(null)}
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       {conflicted.length > 0 && (
-        <Section title={`Conflicts (${conflicted.length})`} accent="danger">
+        <Section
+          title={`Conflicts (${conflicted.length})`}
+          accent="danger"
+          headerExtra={
+            <div className="flex gap-1">
+              <button
+                onClick={() => void mergeContinue()}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-success/15 text-success border border-success/30 hover:bg-success/25"
+                title="Continue merge (all conflicts must be resolved)"
+              >Continue</button>
+              <button
+                onClick={() => void mergeAbort()}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-danger/15 text-danger border border-danger/30 hover:bg-danger/25"
+                title="Abort merge"
+              >Abort</button>
+            </div>
+          }
+        >
           {conflicted.map((f) => (
             <FileRow
               key={`c-${f.path}`}
               entry={f}
               selected={isSelected(f.path, false)}
-              onClick={() => select(f.path, false)}
+              onClick={() => setConflictFile(f.path)}
               actionLabel="Stage"
               onAction={() => stage([f.path])}
               confirming={pendingDiscard === discardKey(f.path, false)}
@@ -235,10 +303,11 @@ interface SectionProps {
   accent?: 'danger'
   actionLabel?: string
   onAction?: () => void
+  headerExtra?: React.ReactNode
   children: React.ReactNode
 }
 
-function Section({ title, accent, actionLabel, onAction, children }: SectionProps): JSX.Element {
+function Section({ title, accent, actionLabel, onAction, headerExtra, children }: SectionProps): JSX.Element {
   return (
     <div className="flex-1 min-h-0 flex flex-col border-b border-line last:border-b-0">
       <div className="h-7 px-3 flex items-center justify-between bg-bg-subtle border-b border-line">
@@ -250,14 +319,17 @@ function Section({ title, accent, actionLabel, onAction, children }: SectionProp
         >
           {title}
         </span>
-        {actionLabel && onAction && (
-          <button
-            onClick={onAction}
-            className="text-xs text-accent hover:text-accent-hover"
-          >
-            {actionLabel}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {headerExtra}
+          {actionLabel && onAction && (
+            <button
+              onClick={onAction}
+              className="text-xs text-accent hover:text-accent-hover"
+            >
+              {actionLabel}
+            </button>
+          )}
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto">{children}</div>
     </div>

@@ -3,7 +3,9 @@ import type {
   CheckSummary,
   CommitChecksInfo,
   CommitPullRequestRef,
+  PrCreateOptions,
   PrListItem,
+  PrReviewOptions,
   PullRequestInfo,
   Result
 } from '@shared/types'
@@ -469,6 +471,52 @@ export async function rerunRun(
   const res = await runGh(args, { cwd })
   if (!res.ok) return res
   return { ok: true, data: true }
+}
+
+// ── PR creation ───────────────────────────────────────────────────────────
+
+export async function createPullRequest(
+  cwd: string,
+  opts: PrCreateOptions
+): Promise<Result<{ url: string; number: number }>> {
+  const args = ['pr', 'create', '--title', opts.title, '--base', opts.base, '--head', opts.head]
+  if (opts.body) args.push('--body', opts.body)
+  else args.push('--body', '')
+  if (opts.draft) args.push('--draft')
+  args.push('--json', 'url,number')
+  const res = await runGh(args, { cwd })
+  if (!res.ok) return res
+  try {
+    const data = JSON.parse(res.data.trim()) as { url: string; number: number }
+    return { ok: true, data }
+  } catch (err) {
+    return { ok: false, code: 1, stderr: `Failed to parse response: ${String(err)}` }
+  }
+}
+
+// ── PR review ────────────────────────────────────────────────────────────
+
+export async function reviewPullRequest(
+  cwd: string,
+  prNumber: number,
+  opts: PrReviewOptions
+): Promise<Result<true>> {
+  const args = ['pr', 'review', String(prNumber)]
+  if (opts.event === 'APPROVE') args.push('--approve')
+  else if (opts.event === 'REQUEST_CHANGES') args.push('--request-changes')
+  else args.push('--comment')
+  if (opts.body) args.push('--body', opts.body)
+  else if (opts.event !== 'APPROVE') args.push('--body', ' ')
+  const res = await runGh(args, { cwd })
+  if (!res.ok) return res
+  return { ok: true, data: true }
+}
+
+// ── PR diff ───────────────────────────────────────────────────────────────
+
+export async function getPrDiff(cwd: string, prNumber: number): Promise<Result<string>> {
+  const res = await runGh(['pr', 'diff', String(prNumber)], { cwd })
+  return res
 }
 
 /**

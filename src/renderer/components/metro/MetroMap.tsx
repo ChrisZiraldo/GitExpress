@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   Plus,
   Minus,
@@ -26,11 +26,12 @@ import {
   LABEL_COLOR,
   LABEL_COLOR_SELECTED
 } from './colors'
-import { branchOffPathVertical, laneRunPath } from './paths'
+import { branchOffPathVertical, mergeConnectorPath, laneRunPath } from './paths'
 import { Station } from './Station'
 import { TrainMarker } from './TrainMarker'
 import { ContextMenu, type MenuItem } from '../ContextMenu'
 import { useMapCi } from '../../hooks/useMapCi'
+import { RebasePanel } from '../RebasePanel'
 import type { CheckRollupState, CommitChecksInfo } from '@shared/types'
 
 const ZOOM_MIN = 0.55
@@ -58,11 +59,21 @@ export function MetroMap(): JSX.Element {
   const refreshSignal = useRepo((s) => s.refreshSignal)
   const metroFilters = useRepo((s) => s.metroFilters)
   const ciByCommit = useRepo((s) => s.ciByCommit)
+  const pushUndoEntry = useRepo((s) => s.pushUndoEntry)
+  const commitQuery = useRepo((s) => s.commitQuery)
+  const setCommitQuery = useRepo((s) => s.setCommitQuery)
+  const setRebasePlan = useRepo((s) => s.setRebasePlan)
+  const rebasePlan = useRepo((s) => s.rebasePlan)
 
   const scrollRef = useRef<HTMLDivElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const [zoom, setZoom] = useState(1)
   const [tooltip, setTooltip] = useState<Tooltip | null>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null)
+  const [branchFromModal, setBranchFromModal] = useState<{ hash: string; shortHash: string } | null>(null)
+  const [newBranchName, setNewBranchName] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [rebasePanelOpen, setRebasePanelOpen] = useState(false)
 
   // Viewport state — used for "frustum culling" of CI fetches: we only
   // ask `gh` about commits that are currently visible (or about to be).
@@ -179,6 +190,35 @@ export function MetroMap(): JSX.Element {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layout.width])
 
+  // Listen for global search open/close events (from hotkeys)
+  useEffect(() => {
+    const onOpen = (): void => { setSearchOpen(true); setTimeout(() => searchInputRef.current?.focus(), 0) }
+    const onClose = (): void => { setSearchOpen(false); setCommitQuery('') }
+    window.addEventListener('gitmetro:search', onOpen)
+    window.addEventListener('gitmetro:search-close', onClose)
+    return () => {
+      window.removeEventListener('gitmetro:search', onOpen)
+      window.removeEventListener('gitmetro:search-close', onClose)
+    }
+  }, [setCommitQuery])
+
+  // In-memory commit search: match subject, author, short hash (case-insensitive)
+  const matchingHashes = useMemo((): Set<string> | null => {
+    const q = commitQuery.trim().toLowerCase()
+    if (!q) return null
+    const set = new Set<string>()
+    for (const s of layout.stations) {
+      if (
+        s.subject.toLowerCase().includes(q) ||
+        s.author.toLowerCase().includes(q) ||
+        s.shortHash.toLowerCase().includes(q)
+      ) {
+        set.add(s.hash)
+      }
+    }
+    return set
+  }, [commitQuery, layout.stations])
+
   // The map is gated by an early return when there's no repo / no graph,
   // so `scrollRef.current` is null on the first render. We re-run the
   // listener-attaching effect whenever this gate flips so the scroll
@@ -268,6 +308,35 @@ export function MetroMap(): JSX.Element {
     return () => window.removeEventListener('gitmetro:scroll-to-commit', onScrollTo)
   }, [layout.stations, zoom, setSelectedCommit])
 
+  // "Jump to HEAD" — scroll so the HEAD station is centred and select it.
+  const scrollToHead = useCallback((): void => {
+    const station = layout.headStation
+    if (!station) return
+    const el = scrollRef.current
+    if (!el) return
+    const tx = Math.max(0, station.x * zoom - el.clientWidth / 2)
+    const ty = Math.max(0, station.y * zoom - el.clientHeight / 2)
+    el.scrollTo({ left: tx, top: ty, behavior: 'smooth' })
+    setSelectedCommit(station.hash)
+  }, [layout.headStation, zoom, setSelectedCommit])
+
+  useEffect(() => {
+    window.addEventListener('gitmetro:scroll-to-head', scrollToHead)
+    return () => window.removeEventListener('gitmetro:scroll-to-head', scrollToHead)
+  }, [scrollToHead])
+
+  // Auto-jump whenever the HEAD commit changes (branch switch, reset, checkout…).
+  const prevHeadHashRef = useRef<string | null>(null)
+  useEffect(() => {
+    const hash = layout.headStation?.hash ?? null
+    if (!hash) return
+    if (hash === prevHeadHashRef.current) return
+    const isFirstLoad = prevHeadHashRef.current === null
+    prevHeadHashRef.current = hash
+    // Skip the very first load — the initial-scroll effect already centres on HEAD.
+    if (!isFirstLoad) scrollToHead()
+  }, [layout.headStation?.hash, scrollToHead])
+
   const isLaneHighlighted = (lane: number): boolean => {
     if (!highlightedBranchId) return true
     const ref = [...refs.local, ...refs.remote].find((r) => r.fullName === highlightedBranchId)
@@ -283,6 +352,23 @@ export function MetroMap(): JSX.Element {
     e.stopPropagation()
     setSelectedCommit(station.hash)
     setTooltip(null)
+  }
+
+  const onStationDoubleClick = (e: React.MouseEvent, station: MetroStation): void => {
+    e.stopPropagation()
+    if (!activeRepo) return
+    // If the station has a local branch ref, check it out by name.
+    // Otherwise check out the commit hash directly (detached HEAD).
+    const localRef = station.refs.find((r) => r.fullName.startsWith('refs/heads/'))
+    if (localRef) {
+      runWithBusy(`Checkout ${localRef.name}`, () =>
+        window.git.branch.checkout(activeRepo.path, localRef.name)
+      )
+    } else {
+      runWithBusy(`Checkout ${station.shortHash}`, () =>
+        window.git.branch.checkoutDetached(activeRepo.path, station.hash)
+      )
+    }
   }
 
   const runWithBusy = async (
@@ -330,25 +416,72 @@ export function MetroMap(): JSX.Element {
       { type: 'separator' },
       {
         label: 'Cherry-pick this commit',
-        onClick: () =>
+        onClick: async () => {
+          const shaRes = await window.git.gitUndo.headSha(activeRepo.path)
+          if (shaRes.ok) pushUndoEntry({ label: `Cherry-pick ${station.shortHash}`, beforeSha: shaRes.data })
           runWithBusy(`Cherry-pick ${station.shortHash}`, () =>
             window.git.commitOps.cherryPick(activeRepo.path, station.hash)
           )
+        }
       },
       {
         label: 'Revert this commit',
-        onClick: () =>
+        onClick: async () => {
+          const shaRes = await window.git.gitUndo.headSha(activeRepo.path)
+          if (shaRes.ok) pushUndoEntry({ label: `Revert ${station.shortHash}`, beforeSha: shaRes.data })
           runWithBusy(`Revert ${station.shortHash}`, () =>
             window.git.commitOps.revert(activeRepo.path, station.hash)
           )
+        }
       },
       { type: 'separator' },
+      {
+        label: 'Branch from here…',
+        onClick: () => {
+          setNewBranchName('')
+          setBranchFromModal({ hash: station.hash, shortHash: station.shortHash })
+        }
+      },
+      {
+        label: 'Start rebase from here…',
+        onClick: async () => {
+          if (!activeRepo) return
+          // Build plan from HEAD back to this station (inclusive), picking all
+          const currentIdx = layout.stations.findIndex((s) => s.hash === status?.branch.current || s.isHead)
+          const targetIdx = layout.stations.findIndex((s) => s.hash === station.hash)
+          if (currentIdx < 0 || targetIdx < 0) {
+            pushToast('info', 'Select a station on the current branch to rebase from')
+            return
+          }
+          const range = layout.stations.slice(Math.min(currentIdx, targetIdx), Math.max(currentIdx, targetIdx) + 1)
+          const plan = range
+            .filter((s) => s.hash !== station.hash)
+            .map((s) => ({ sha: s.hash, action: 'pick' as const, subject: s.subject }))
+          if (!plan.length) {
+            pushToast('info', 'No commits to rebase')
+            return
+          }
+          setRebasePlan(plan)
+          setRebasePanelOpen(true)
+        }
+      },
       {
         label: 'Checkout (detached)',
         onClick: () =>
           runWithBusy('Checkout (detached)', () =>
             window.git.branch.checkoutDetached(activeRepo.path, station.hash)
           )
+      },
+      { type: 'separator' },
+      {
+        label: `Reset to this commit (mixed)`,
+        onClick: async () => {
+          const shaRes = await window.git.gitUndo.headSha(activeRepo.path)
+          if (shaRes.ok) pushUndoEntry({ label: `Reset to ${station.shortHash}`, beforeSha: shaRes.data })
+          runWithBusy(`Reset to ${station.shortHash}`, () =>
+            window.git.commitOps.reset(activeRepo.path, station.hash, 'mixed')
+          )
+        }
       }
     ]
     setMenu({ x: e.clientX, y: e.clientY, items })
@@ -465,6 +598,42 @@ export function MetroMap(): JSX.Element {
 
   return (
     <div className="flex-1 min-h-0 relative bg-bg overflow-hidden">
+      {/* Floating commit search bar */}
+      {searchOpen && (
+        <div style={{
+          position: 'absolute', top: 48, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 200, display: 'flex', alignItems: 'center', gap: 6,
+          background: '#0b0e14', border: '1px solid #2a2f3b', borderRadius: 8,
+          padding: '5px 10px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+          minWidth: 300
+        }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b949e" strokeWidth="2" strokeLinecap="round">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+          </svg>
+          <input
+            ref={searchInputRef}
+            value={commitQuery}
+            onChange={(e) => setCommitQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') { setSearchOpen(false); setCommitQuery('') }
+            }}
+            placeholder="Search commits…"
+            style={{
+              flex: 1, background: 'none', border: 'none', outline: 'none',
+              color: '#c9d1d9', fontSize: 13
+            }}
+          />
+          {commitQuery && (
+            <span style={{ fontSize: 11, color: '#8b949e', whiteSpace: 'nowrap' }}>
+              {matchingHashes?.size ?? 0} match{matchingHashes?.size === 1 ? '' : 'es'}
+            </span>
+          )}
+          <button
+            onClick={() => { setSearchOpen(false); setCommitQuery('') }}
+            style={{ background: 'none', border: 'none', color: '#8b949e', cursor: 'pointer', padding: 0, fontSize: 16, lineHeight: 1 }}
+          >×</button>
+        </div>
+      )}
       {/* Scrollable map body */}
       <div
         ref={scrollRef}
@@ -526,7 +695,9 @@ export function MetroMap(): JSX.Element {
             )}
 
             {layout.stations.map((station) => {
-              const dim = !isLaneHighlighted(station.lane)
+              const laneDim = !isLaneHighlighted(station.lane)
+              const searchDim = matchingHashes !== null && !matchingHashes.has(station.hash)
+              const dim = laneDim || searchDim
               return (
                 <Station
                   key={station.hash}
@@ -534,6 +705,7 @@ export function MetroMap(): JSX.Element {
                   selected={selectedCommit === station.hash}
                   dimmed={!!dim}
                   onClick={(e) => onStationClick(e, station)}
+                  onDoubleClick={(e) => onStationDoubleClick(e, station)}
                   onContextMenu={(e) => onStationContextMenu(e, station)}
                   onMouseEnter={(e) => onStationHover(e, station)}
                   onMouseLeave={onStationLeave}
@@ -545,6 +717,11 @@ export function MetroMap(): JSX.Element {
             <ConflictBadge
               layout={layout}
               conflictCount={status?.conflicted.length ?? 0}
+              onClick={
+                (status?.conflicted.length ?? 0) > 0
+                  ? () => window.dispatchEvent(new CustomEvent('gitmetro:open-conflicts'))
+                  : undefined
+              }
             />
 
             {/* Per-station CI marks — only for non-HEAD, non-tagged stations
@@ -595,6 +772,37 @@ export function MetroMap(): JSX.Element {
                     runWithBusy(`Checkout ${t.name}`, () =>
                       window.git.branch.checkout(activeRepo.path, t.name)
                     )
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    if (!activeRepo) return
+                    const pillMenuItems: MenuItem[] = [
+                      {
+                        label: `Push ${t.name}`,
+                        onClick: () => runWithBusy(`Push ${t.name}`, () =>
+                          window.git.remote.push(activeRepo.path, { branch: t.name })
+                        )
+                      },
+                      {
+                        label: `Pull ${t.name}`,
+                        onClick: () => runWithBusy(`Pull ${t.name}`, () =>
+                          window.git.remote.pull(activeRepo.path, { branch: t.name })
+                        )
+                      },
+                    ]
+                    if (!isHead) {
+                      pillMenuItems.push(
+                        { type: 'separator' },
+                        {
+                          label: `Checkout ${t.name}`,
+                          onClick: () => runWithBusy(`Checkout ${t.name}`, () =>
+                            window.git.branch.checkout(activeRepo.path, t.name)
+                          )
+                        }
+                      )
+                    }
+                    setMenu({ x: e.clientX, y: e.clientY, items: pillMenuItems })
                   }}
                   style={{
                     position: 'sticky',
@@ -720,6 +928,23 @@ export function MetroMap(): JSX.Element {
 
       {/* Compass + Legend overlay at top-left */}
 
+      {/* Rebase mode toggle — top-right of map */}
+      <button
+        onClick={() => setRebasePanelOpen((v) => !v)}
+        title="Interactive Rebase Panel"
+        style={{
+          position: 'absolute', top: 10, right: 10, zIndex: 100,
+          display: 'flex', alignItems: 'center', gap: 4,
+          padding: '4px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+          background: rebasePanelOpen ? '#1f6feb22' : '#161b22',
+          border: `1px solid ${rebasePanelOpen ? '#388bfd66' : '#2a2f3b'}`,
+          color: rebasePanelOpen ? '#388bfd' : '#8b949e',
+          cursor: 'pointer'
+        }}
+      >
+        ↕ Rebase
+      </button>
+
       {/* Zoom controls bottom-left */}
       <ZoomControls
         zoom={zoom}
@@ -751,6 +976,82 @@ export function MetroMap(): JSX.Element {
           items={menu.items}
           onClose={() => setMenu(null)}
         />
+      )}
+
+      {/* Rebase panel */}
+      {rebasePanelOpen && (
+        <RebasePanel onClose={() => setRebasePanelOpen(false)} />
+      )}
+
+      {/* Branch from station modal */}
+      {branchFromModal && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999
+          }}
+          onClick={() => setBranchFromModal(null)}
+        >
+          <div
+            style={{
+              background: '#0b0e14', border: '1px solid #2a2f3b', borderRadius: 10,
+              padding: '20px 24px', minWidth: 320, display: 'flex', flexDirection: 'column', gap: 12
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#c9d1d9' }}>
+              Branch from <code style={{ fontSize: 12, color: '#8b949e' }}>{branchFromModal.shortHash}</code>
+            </div>
+            <input
+              autoFocus
+              value={newBranchName}
+              onChange={(e) => setNewBranchName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const name = newBranchName.trim()
+                  if (!name || !activeRepo) return
+                  setBranchFromModal(null)
+                  runWithBusy(`Create branch ${name}`, () =>
+                    window.git.branch.createFromCommit(activeRepo.path, name, branchFromModal.hash, { checkout: true })
+                  )
+                } else if (e.key === 'Escape') {
+                  setBranchFromModal(null)
+                }
+              }}
+              placeholder="New branch name"
+              style={{
+                padding: '6px 10px', background: '#161b22', border: '1px solid #2a2f3b',
+                borderRadius: 6, color: '#c9d1d9', fontSize: 13, outline: 'none'
+              }}
+            />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setBranchFromModal(null)}
+                style={{ padding: '5px 14px', background: '#21262d', border: '1px solid #2a2f3b', borderRadius: 6, color: '#8b949e', fontSize: 12, cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const name = newBranchName.trim()
+                  if (!name || !activeRepo) return
+                  setBranchFromModal(null)
+                  runWithBusy(`Create branch ${name}`, () =>
+                    window.git.branch.createFromCommit(activeRepo.path, name, branchFromModal.hash, { checkout: true })
+                  )
+                }}
+                disabled={!newBranchName.trim()}
+                style={{
+                  padding: '5px 14px', background: '#238636', border: '1px solid #2ea043',
+                  borderRadius: 6, color: '#fff', fontSize: 12, cursor: 'pointer',
+                  opacity: newBranchName.trim() ? 1 : 0.5
+                }}
+              >
+                Create & Checkout
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
@@ -815,12 +1116,25 @@ function Lines({ layout, highlight }: LinesProps): JSX.Element {
   const yAt = (rowIdx: number): number =>
     layout.topPad + rowIdx * laneHeight + laneHeight / 2
 
-  // Group continuous live-cell runs per lane into path segments.
+  // The first row that has an actual STATION on each lane.  The rail must not
+  // extend above this row — the segment between the merge-commit row and the
+  // first station is owned by the Curves merge-connector, which anchors the
+  // branch line visually to the merge commit on trunk.  Drawing it here as
+  // well just creates a floating rail with no station at its top end.
+  const laneFirstStationRow = new Map<number, number>()
+  for (const s of layout.stations) {
+    const cur = laneFirstStationRow.get(s.lane)
+    if (cur === undefined || s.row < cur) laneFirstStationRow.set(s.lane, s.row)
+  }
+
+  // Group continuous live-cell runs per lane into path segments, starting
+  // no earlier than the lane's first station row.
   const laneRuns = new Map<number, Array<Array<{ x: number; y: number }>>>()
   for (let l = 0; l < layout.laneCount; l++) {
+    const startRow = laneFirstStationRow.get(l) ?? 0
     const runs: Array<Array<{ x: number; y: number }>> = []
     let current: Array<{ x: number; y: number }> | null = null
-    for (let i = 0; i < rows.length; i++) {
+    for (let i = startRow; i < rows.length; i++) {
       const row = rows[i]
       const live = row.liveLanes[l] !== null && row.liveLanes[l] !== undefined
       if (live) {
@@ -963,10 +1277,22 @@ function Curves({ layout, highlight }: CurvesProps): JSX.Element {
       if (parentRow === -1) continue
       const x2 = xAt(pl)
       const y2 = yAt(parentRow)
-      const d = branchOffPathVertical(x1, y1, x2, y2, laneHeight, colWidth)
+
+      // pi === 0: branch-off — the current commit started a new lane diverging
+      //   from pl (trunk). Riser runs along the CURRENT lane (x1). ✓
+      // pi > 0:  merge-in — a branch (pl) is being absorbed into the current
+      //   lane at this commit. Use mergeConnectorPath so the riser runs along
+      //   the BRANCH lane (x2/pl), anchoring the branch line to the merge
+      //   commit at the top instead of leaving it floating.
+      const d = pi === 0
+        ? branchOffPathVertical(x1, y1, x2, y2, laneHeight, colWidth)
+        : mergeConnectorPath(x1, y1, x2, y2, laneHeight, colWidth)
+
+      // Color and stale state follow the BRANCH lane (pl for merges, lane for branch-offs).
+      const colorLane = pi === 0 ? lane : pl
       const dim = !highlight(pl) && !highlight(lane)
-      const stale = layout.staleLanes.has(lane)
-      const branchColor = laneColor(lane)
+      const stale = layout.staleLanes.has(colorLane)
+      const branchColor = laneColor(colorLane)
       const baseColor = stale ? laneStaleTint(branchColor) : branchColor
       const key = `curve-p-${commit.hash}-${pi}`
       if (!dim) {
@@ -1421,6 +1747,7 @@ function AheadBadge({ layout, status }: AheadBadgeProps): JSX.Element {
 interface ConflictBadgeProps {
   layout: MetroLayout
   conflictCount: number
+  onClick?: () => void
 }
 
 /**
@@ -1429,7 +1756,7 @@ interface ConflictBadgeProps {
  * has unresolved merge conflicts in their checkout. Amber pill with
  * triangle glyph + count.
  */
-function ConflictBadge({ layout, conflictCount }: ConflictBadgeProps): JSX.Element {
+function ConflictBadge({ layout, conflictCount, onClick }: ConflictBadgeProps): JSX.Element {
   if (conflictCount <= 0) return <></>
   const head = layout.headStation
   if (!head) return <></>
@@ -1440,7 +1767,12 @@ function ConflictBadge({ layout, conflictCount }: ConflictBadgeProps): JSX.Eleme
   const bx = head.x + 18
   const by = head.y + layout.laneHeight * 0.6 + 4
   return (
-    <g pointerEvents="none">
+    <g
+      pointerEvents={onClick ? 'all' : 'none'}
+      onClick={onClick}
+      cursor={onClick ? 'pointer' : undefined}
+      title={onClick ? 'Click to resolve conflicts' : undefined}
+    >
       <rect
         x={bx}
         y={by}

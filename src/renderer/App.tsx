@@ -12,6 +12,8 @@ import { TopBar } from './components/TopBar'
 import { MetroMap } from './components/metro/MetroMap'
 import { StationDetailsPanel } from './components/StationDetailsPanel'
 import { PullRequestsView } from './components/PullRequestsView'
+import { ShortcutsOverlay } from './components/ShortcutsOverlay'
+import { useHotkeys } from './hooks/useHotkeys'
 
 export function App(): JSX.Element {
   const activeRepo = useRepo((s) => s.activeRepo)
@@ -25,8 +27,41 @@ export function App(): JSX.Element {
   const stashView = useRepo((s) => s.stashView)
   const setStashView = useRepo((s) => s.setStashView)
   const metroViewTab = useRepo((s) => s.metroViewTab)
+  const setBusy = useRepo((s) => s.setBusy)
   useGitStatus()
   useCiStatus()
+  useHotkeys({
+    onFetch: () => {
+      if (!activeRepo) return
+      void (async () => {
+        setBusy(true)
+        const res = await window.git.remote.fetch(activeRepo.path)
+        setBusy(false)
+        if (res.ok) { pushToast('success', 'Fetched'); refreshSignal() }
+        else pushToast('error', `Fetch failed: ${res.stderr}`)
+      })()
+    },
+    onPush: () => {
+      if (!activeRepo) return
+      void (async () => {
+        setBusy(true)
+        const res = await window.git.remote.push(activeRepo.path, {})
+        setBusy(false)
+        if (res.ok) { pushToast('success', 'Pushed'); refreshSignal() }
+        else pushToast('error', `Push failed: ${res.stderr}`)
+      })()
+    },
+    onPull: () => {
+      if (!activeRepo) return
+      void (async () => {
+        setBusy(true)
+        const res = await window.git.remote.pull(activeRepo.path, {})
+        setBusy(false)
+        if (res.ok) { pushToast('success', 'Pulled'); refreshSignal() }
+        else pushToast('error', `Pull failed: ${res.stderr}`)
+      })()
+    }
+  })
 
   const [dryRun, setDryRun] = useState<{ active: boolean; logPath: string } | null>(null)
   useEffect(() => {
@@ -138,6 +173,7 @@ export function App(): JSX.Element {
         )}
       </div>
       <Toast />
+      <ShortcutsOverlay />
     </div>
   )
 }

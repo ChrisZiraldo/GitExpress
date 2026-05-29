@@ -21,6 +21,7 @@ export function SettingsDialog({ onClose }: Props): JSX.Element {
   const [showKey, setShowKey] = useState(false)
   const [clearKey, setClearKey] = useState(false)
   const [rules, setRules] = useState('')
+  const [gpgSign, setGpgSign] = useState(false)
 
   const initialRulesRef = useRef('')
 
@@ -37,6 +38,7 @@ export function SettingsDialog({ onClose }: Props): JSX.Element {
       setView(res.data)
       setRules(res.data.commitMessageRules)
       initialRulesRef.current = res.data.commitMessageRules
+      setGpgSign(res.data.gpgSign)
       setLoading(false)
     })()
     return () => {
@@ -55,16 +57,18 @@ export function SettingsDialog({ onClose }: Props): JSX.Element {
   const apiKeyAlreadySet = !!view?.cursorApiKeySet
   const rulesDirty = rules !== initialRulesRef.current
   const keyDirty = clearKey || apiKeyInput.trim().length > 0
-  const dirty = rulesDirty || keyDirty
+  const gpgSignDirty = view !== null && gpgSign !== view.gpgSign
+  const dirty = rulesDirty || keyDirty || gpgSignDirty
 
   const onSave = async (): Promise<void> => {
     if (saving) return
     setSaving(true)
     try {
-      const update: { cursorApiKey?: string | null; commitMessageRules?: string } = {}
+      const update: { cursorApiKey?: string | null; commitMessageRules?: string; gpgSign?: boolean } = {}
       if (clearKey) update.cursorApiKey = null
       else if (apiKeyInput.trim().length > 0) update.cursorApiKey = apiKeyInput.trim()
       if (rulesDirty) update.commitMessageRules = rules
+      if (gpgSignDirty) update.gpgSign = gpgSign
 
       if (Object.keys(update).length === 0) {
         onClose()
@@ -182,6 +186,24 @@ export function SettingsDialog({ onClose }: Props): JSX.Element {
                 spellCheck={false}
                 className="w-full px-2 py-1.5 bg-bg-subtle border border-line rounded text-xs font-mono focus:outline-none focus:border-accent resize-y leading-relaxed"
               />
+            </section>
+
+            {/* ── GPG signing ────────────────────────────────────────── */}
+            <section>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={gpgSign}
+                  onChange={(e) => setGpgSign(e.target.checked)}
+                  className="w-4 h-4 accent-accent"
+                />
+                <span className="text-xs font-medium text-text">Sign commits with GPG</span>
+              </label>
+              <p className="text-xs text-muted mt-1 leading-relaxed ml-6">
+                When disabled (default), <code className="font-mono">--no-gpg-sign</code> is
+                passed to every commit so you don't need a GPG key or passphrase configured.
+                Enable this only if your git config has GPG set up correctly.
+              </p>
             </section>
           </div>
         )}

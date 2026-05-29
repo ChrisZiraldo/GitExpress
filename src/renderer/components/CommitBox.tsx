@@ -14,13 +14,14 @@ export function CommitBox({ onRefresh }: Props): JSX.Element {
   const pushToast = useRepo((s) => s.pushToast)
   const refreshSignal = useRepo((s) => s.refreshSignal)
   const refreshVersion = useRepo((s) => s.refreshVersion)
+  const pushUndoEntry = useRepo((s) => s.pushUndoEntry)
   const [subject, setSubject] = useState('')
   const [body, setBody] = useState('')
   const [bodyOpen, setBodyOpen] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [amend, setAmend] = useState(false)
 
-  // Track whether the user has stored a Cursor API key, so we can disable
-  // the Generate button (and tell them to open Settings) when they haven't.
+  // Track whether the user has stored a Cursor API key
   const [apiKeySet, setApiKeySet] = useState(false)
 
   useEffect(() => {
@@ -30,16 +31,30 @@ export function CommitBox({ onRefresh }: Props): JSX.Element {
       if (cancelled) return
       if (res.ok) setApiKeySet(res.data.cursorApiKeySet)
     })()
-    return () => {
-      cancelled = true
-    }
-    // Refresh when the user saves new settings (refreshSignal increments).
+    return () => { cancelled = true }
   }, [refreshVersion])
+
+  // When amend is toggled on, prefill message from HEAD
+  useEffect(() => {
+    if (!amend || !activeRepo) return
+    let cancelled = false
+    void (async () => {
+      const res = await window.git.commitInspect.show(activeRepo.path, 'HEAD')
+      if (cancelled || !res.ok) return
+      setSubject(res.data.subject)
+      if (res.data.body) { setBody(res.data.body); setBodyOpen(true) }
+    })()
+    return () => { cancelled = true }
+  }, [amend, activeRepo])
 
   if (!activeRepo) return <></>
 
   const stagedCount = status?.staged.length ?? 0
-  const canCommit = stagedCount > 0 && subject.trim().length > 0 && !busy
+  const branch = status?.branch
+  const headPushed = !!(branch?.upstream && branch.ahead === 0)
+  const canAmend = !headPushed // warn if already pushed
+
+  const canCommit = (amend || stagedCount > 0) && subject.trim().length > 0 && !busy
   const canGenerate = stagedCount > 0 && !busy && !generating
 
   const generateMessage = async (): Promise<void> => {
@@ -75,21 +90,31 @@ export function CommitBox({ onRefresh }: Props): JSX.Element {
     if (!canCommit) return
     setBusy(true)
     try {
+      // Capture HEAD before amend for undo
+      if (amend) {
+        const shaRes = await window.git.gitUndo.headSha(activeRepo.path)
+        if (shaRes.ok) {
+          const beforeSha = shaRes.data
+          pushUndoEntry({ label: 'Amend commit', beforeSha })
+        }
+      }
       const res = await window.git.commit.create(activeRepo.path, {
         message: subject.trim(),
-        description: body.trim() || undefined
+        description: body.trim() || undefined,
+        amend
       })
       if (!res.ok) {
         pushToast('error', `Commit failed: ${res.stderr}`)
         return
       }
-      pushToast('success', push ? 'Committed — pushing…' : 'Commit created')
+      pushToast('success', push ? 'Committed — pushing…' : amend ? 'Commit amended' : 'Commit created')
       setSubject('')
       setBody('')
       setBodyOpen(false)
+      setAmend(false)
 
       if (push) {
-        const pr = await window.git.remote.push(activeRepo.path, {})
+        const pr = await window.git.remote.push(activeRepo.path, amend ? { force: true } : {})
         if (pr.ok) pushToast('success', 'Pushed successfully')
         else pushToast('error', `Push failed: ${pr.stderr}`)
       }
@@ -159,25 +184,40 @@ export function CommitBox({ onRefresh }: Props): JSX.Element {
         </button>
       )}
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-muted shrink-0">
-          {stagedCount} file{stagedCount === 1 ? '' : 's'} staged
-        </span>
+        <label
+          className="flex items-center gap-1.5 text-xs cursor-pointer select-none"
+          title={headPushed ? 'HEAD is already pushed — amending will require a force push' : 'Amend the most recent commit instead of creating a new one'}
+        >
+          <input
+            type="checkbox"
+            checked={amend}
+            onChange={(e) => {
+              if (e.target.checked && !canAmend) {
+                pushToast('info', 'HEAD is already pushed. Amending will rewrite history and require a force push.')
+              }
+              setAmend(e.target.checked)
+              if (!e.target.checked) { setSubject(''); setBody(''); setBodyOpen(false) }
+            }}
+            className="accent-accent"
+          />
+          <span className={headPushed ? 'text-warn' : 'text-muted'}>Amend</span>
+        </label>
         <div className="flex items-center gap-1.5 shrink-0">
           <button
             onClick={() => doCommit(false)}
             disabled={!canCommit}
             className="px-3 py-1.5 rounded-md bg-bg-panel hover:bg-line disabled:bg-line disabled:text-muted text-text text-sm"
-            title="Commit only"
+            title={amend ? 'Amend last commit' : 'Commit only'}
           >
-            Commit
+            {amend ? 'Amend' : 'Commit'}
           </button>
           <button
             onClick={() => doCommit(true)}
             disabled={!canCommit}
             className="px-3 py-1.5 rounded-md bg-accent hover:bg-accent-hover disabled:bg-line disabled:text-muted text-white text-sm font-medium whitespace-nowrap"
-            title="Commit and push (Cmd/Ctrl+Enter)"
+            title={amend ? 'Amend and force push (Cmd/Ctrl+Enter)' : 'Commit and push (Cmd/Ctrl+Enter)'}
           >
-            Commit & Push
+            {amend ? 'Amend & Push' : 'Commit & Push'}
           </button>
         </div>
       </div>

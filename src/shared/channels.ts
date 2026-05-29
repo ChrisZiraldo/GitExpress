@@ -38,6 +38,7 @@ export const Channels = {
   FileDiscard: 'file:discard',
   RepoGetLast: 'repo:getLast',
   BranchResetToRemote: 'branch:resetToRemote',
+  BranchResetHard: 'branch:resetHard',
   TagCreate: 'tag:create',
   TagDelete: 'tag:delete',
   CommitCherryPick: 'commit:cherryPick',
@@ -56,6 +57,30 @@ export const Channels = {
   SettingsGet: 'settings:get',
   SettingsUpdate: 'settings:update',
   AiGenerateCommitMessage: 'ai:generateCommitMessage',
+  // Git undo (reflog-based)
+  GitUndo: 'git:undo',
+  GitHeadSha: 'git:headSha',
+  // .gitignore
+  GitignoreRead: 'gitignore:read',
+  GitignoreWrite: 'gitignore:write',
+  GitignoreAppend: 'gitignore:append',
+  // PR creation & review
+  PrCreate: 'pr:create',
+  PrReview: 'pr:review',
+  PrDiff: 'pr:diff',
+  // Conflict resolution
+  ConflictVersions: 'conflict:versions',
+  ConflictResolve: 'conflict:resolve',
+  ConflictUseSide: 'conflict:useSide',
+  MergeContinue: 'merge:continue',
+  MergeAbort: 'merge:abort',
+  // Interactive rebase
+  RebaseStart: 'rebase:start',
+  RebaseStatus: 'rebase:status',
+  RebaseContinue: 'rebase:continue',
+  RebaseAbort: 'rebase:abort',
+  // Log search
+  LogSearch: 'log:search',
   // One-way pushes from main → renderer (no invoke, use ipcRenderer.on)
   MenuOpenRepo: 'menu:open-repo',
   MenuCloseRepo: 'menu:close-repo'

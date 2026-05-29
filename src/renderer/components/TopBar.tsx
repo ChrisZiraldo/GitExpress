@@ -11,7 +11,9 @@ import {
   Layers,
   Maximize2,
   RotateCcw,
-  Home
+  Home,
+  Navigation,
+  RefreshCw
 } from 'lucide-react'
 import { useRepo, type MetroViewTab } from '../store/useRepo'
 import type { FileEntry } from '@shared/types'
@@ -47,6 +49,8 @@ export function TopBar(): JSX.Element {
   const setMetroViewTab = useRepo((s) => s.setMetroViewTab)
   const highlightedBranchId = useRepo((s) => s.highlightedBranchId)
   const setHighlightedBranchId = useRepo((s) => s.setHighlightedBranchId)
+  const clearCi = useRepo((s) => s.clearCi)
+  const ciAvailable = useRepo((s) => s.ciAvailable)
 
   const [repoMenuOpen, setRepoMenuOpen] = useState(false)
   const [branchFilterOpen, setBranchFilterOpen] = useState(false)
@@ -57,6 +61,9 @@ export function TopBar(): JSX.Element {
   const [stashSelected, setStashSelected] = useState<Set<string>>(new Set())
   const [confirmReset, setConfirmReset] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [gitignoreOpen, setGitignoreOpen] = useState(false)
+  const [gitignoreContent, setGitignoreContent] = useState('')
+  const [gitignoreSaving, setGitignoreSaving] = useState(false)
 
   const branch = status?.branch
   const branchName = branch?.detached ? 'DETACHED' : branch?.current ?? '...'
@@ -110,7 +117,7 @@ export function TopBar(): JSX.Element {
     const id = setInterval(async () => {
       const res = await window.git.remote.fetch(activeRepo.path)
       if (!res.ok) pushToast('error', `Auto-fetch failed: ${res.stderr}`)
-      else refreshSignal()
+      else { clearCi(); refreshSignal() }
     }, 60_000)
     return () => clearInterval(id)
   }, [activeRepo?.path])
@@ -134,9 +141,17 @@ export function TopBar(): JSX.Element {
       return
     }
     setConfirmReset(false)
-    await runWithBusy('Reset to remote', () =>
-      window.git.branch.resetToRemote(activeRepo!.path)
-    )
+    if (branch?.upstream) {
+      await runWithBusy('Reset to remote', () =>
+        window.git.branch.resetToRemote(activeRepo!.path)
+      )
+    } else {
+      await runWithBusy('Reset to HEAD', () =>
+        window.git.branch.resetHard(activeRepo!.path)
+      )
+    }
+    // After the map refreshes, jump to and select the new HEAD station.
+    setTimeout(() => window.dispatchEvent(new CustomEvent('gitmetro:scroll-to-head')), 300)
   }
 
   const submitNewBranch = async (): Promise<void> => {
@@ -387,21 +402,29 @@ export function TopBar(): JSX.Element {
               icon={<ArrowUpFromLine size={16} />}
               primary
             />
-            {branch?.upstream && (
-              <ToolStackButton
-                onClick={resetToRemote}
-                disabled={busy}
-                label={confirmReset ? 'Confirm?' : 'Reset'}
-                title={
-                  confirmReset
-                    ? 'Click again to confirm — discards local commits!'
-                    : `Hard reset to ${branch.upstream}`
-                }
-                icon={<RotateCcw size={16} />}
-                warn={!confirmReset}
-                danger={confirmReset}
-              />
-            )}
+            <ToolStackButton
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('gitmetro:scroll-to-head'))
+              }}
+              label="HEAD"
+              title="Jump to HEAD — scroll the map to the current branch tip"
+              icon={<Navigation size={16} />}
+            />
+            <ToolStackButton
+              onClick={resetToRemote}
+              disabled={busy}
+              label={confirmReset ? 'Confirm?' : 'Reset'}
+              title={
+                confirmReset
+                  ? 'Click again to confirm — discards local changes!'
+                  : branch?.upstream
+                    ? `Hard reset to ${branch.upstream}`
+                    : 'Hard reset to HEAD — discard all uncommitted changes'
+              }
+              icon={<RotateCcw size={16} />}
+              warn={!confirmReset}
+              danger={confirmReset}
+            />
             <ToolDivider />
             <ToolStackButton
               onClick={() => setNewBranchOpen(true)}
@@ -436,6 +459,30 @@ export function TopBar(): JSX.Element {
           title="Fit visible stations to screen"
           icon={<Maximize2 size={16} />}
         />
+        {ciAvailable !== false && (
+          <ToolStackButton
+            onClick={() => {
+              clearCi()
+              refreshSignal()
+            }}
+            disabled={busy}
+            label="CI"
+            title="Refresh CI status for all visible stations"
+            icon={<RefreshCw size={16} />}
+          />
+        )}
+        <ToolStackButton
+          onClick={async () => {
+            if (!activeRepo) return
+            const res = await window.git.gitignore.read(activeRepo.path)
+            if (res.ok) setGitignoreContent(res.data.content)
+            else setGitignoreContent('')
+            setGitignoreOpen(true)
+          }}
+          label=".gitignore"
+          title="Edit .gitignore"
+          icon={<span style={{ fontSize: 10, fontWeight: 700 }}>.gi</span>}
+        />
         <ToolStackButton
           onClick={() => setSettingsOpen(true)}
           label="Settings"
@@ -445,6 +492,38 @@ export function TopBar(): JSX.Element {
       </div>
 
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+
+      {gitignoreOpen && activeRepo && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}
+          onClick={() => setGitignoreOpen(false)}>
+          <div style={{ background: '#0b0e14', border: '1px solid #2a2f3b', borderRadius: 12, padding: '20px 24px', width: 560, maxHeight: '70vh', display: 'flex', flexDirection: 'column', gap: 12 }}
+            onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#c9d1d9' }}>.gitignore</div>
+            <textarea
+              value={gitignoreContent}
+              onChange={(e) => setGitignoreContent(e.target.value)}
+              rows={20}
+              style={{ flex: 1, background: '#161b22', border: '1px solid #2a2f3b', borderRadius: 6, color: '#c9d1d9', fontSize: 12, fontFamily: 'monospace', padding: '8px', outline: 'none', resize: 'vertical' }}
+            />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setGitignoreOpen(false)} style={{ padding: '5px 14px', background: '#21262d', border: '1px solid #2a2f3b', borderRadius: 6, color: '#8b949e', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+              <button
+                disabled={gitignoreSaving}
+                onClick={async () => {
+                  setGitignoreSaving(true)
+                  const res = await window.git.gitignore.write(activeRepo.path, gitignoreContent)
+                  setGitignoreSaving(false)
+                  if (res.ok) { pushToast('success', '.gitignore saved'); setGitignoreOpen(false); refreshSignal() }
+                  else pushToast('error', `Save failed: ${res.stderr}`)
+                }}
+                style={{ padding: '5px 14px', background: '#238636', border: '1px solid #2ea043', borderRadius: 6, color: '#fff', fontSize: 12, cursor: 'pointer', opacity: gitignoreSaving ? 0.6 : 1 }}
+              >
+                {gitignoreSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {newBranchOpen && (
         <Modal title={`New branch from ${branchName}`} onClose={() => setNewBranchOpen(false)}>
