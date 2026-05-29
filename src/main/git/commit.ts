@@ -6,16 +6,32 @@ import type {
   Result
 } from '@shared/types'
 import { runGit, runGitVoid } from './runner'
+import { getGpgSign } from '../store'
 
 const SEP = '\x1f'
 const REC = '\x1e'
 
 export async function commitCreate(cwd: string, input: CommitInput): Promise<Result<true>> {
+  const noSign = !getGpgSign()
+  if (input.amend) {
+    const message = input.message.trim()
+    const args = ['commit', '--amend']
+    if (noSign) args.push('--no-gpg-sign')
+    if (message) {
+      args.push('-m', message)
+      const description = input.description?.trim()
+      if (description) args.push('-m', description)
+    } else {
+      args.push('--no-edit')
+    }
+    return runGitVoid(args, { cwd })
+  }
   const message = input.message.trim()
   if (!message) {
     return { ok: false, code: 1, stderr: 'Commit message is required' }
   }
   const args = ['commit', '-m', message]
+  if (noSign) args.push('--no-gpg-sign')
   const description = input.description?.trim()
   if (description) {
     args.push('-m', description)

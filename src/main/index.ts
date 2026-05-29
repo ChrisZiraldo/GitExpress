@@ -9,13 +9,14 @@ const isDev = !app.isPackaged
 function createWindow(): BrowserWindow {
   const bounds = getWindowBounds()
   const win = new BrowserWindow({
+    title: 'Git Express',
     width: bounds.width,
     height: bounds.height,
     x: bounds.x,
     y: bounds.y,
     minWidth: 600,
     minHeight: 480,
-    backgroundColor: '#0f1115',
+    backgroundColor: '#0b0e14',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     show: false,
     webPreferences: {

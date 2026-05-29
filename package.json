@@ -1,9 +1,10 @@
 {
-  "name": "simplegit",
+  "name": "git-express",
+  "productName": "Git Express",
   "version": "0.1.0",
-  "description": "A simple Electron-based Git GUI that wraps the local git CLI.",
+  "description": "Git Express — read your repo like a subway map. A polished Electron-based Git client that visualizes history as a transit line.",
   "main": "out/main/index.js",
-  "author": "SimpleGit",
+  "author": "Git Express",
   "license": "MIT",
   "private": true,
   "scripts": {
@@ -17,8 +18,10 @@
     "package:linux": "electron-vite build && electron-builder --linux"
   },
   "dependencies": {
+    "@cursor/sdk": "^1.0.14",
     "diff2html": "^3.4.48",
     "electron-store": "^8.2.0",
+    "lucide-react": "^0.469.0",
     "zustand": "^4.5.5"
   },
   "devDependencies": {
@@ -34,6 +37,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tailwindcss": "^3.4.6",
+    "tsx": "^4.22.3",
     "typescript": "^5.5.3",
     "vite": "^5.3.3"
   }

@@ -6,14 +6,26 @@ import type {
   Commit,
   CommitDetail,
   CommitInput,
+  CommitChecksInfo,
+  ConflictVersions,
   DiffOptions,
   FileChangeType,
+  GeneratedCommitMessage,
+  GitignoreReadResult,
   GraphCommit,
+  PrCreateOptions,
+  PrListItem,
+  PrReviewOptions,
   PullOptions,
+  PullRequestInfo,
   PushOptions,
+  RebaseStatus,
+  RebasePlanEntry,
   RecentRepo,
   RefSet,
   Result,
+  SettingsUpdate,
+  SettingsView,
   Stash,
   StashFileEntry,
   StashPushOptions,
@@ -51,6 +63,14 @@ const api = {
     ): Promise<Result<true>> =>
       ipcRenderer.invoke(Channels.FileDiscard, cwd, path, staged, changeType)
   },
+  hunk: {
+    stage: (cwd: string, patch: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.HunkStage, cwd, patch),
+    unstage: (cwd: string, patch: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.HunkUnstage, cwd, patch),
+    discard: (cwd: string, patch: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.HunkDiscard, cwd, patch)
+  },
   commit: {
     create: (cwd: string, input: CommitInput): Promise<Result<true>> =>
       ipcRenderer.invoke(Channels.CommitCreate, cwd, input)
@@ -84,7 +104,15 @@ const api = {
     checkoutRemote: (cwd: string, remoteRef: string): Promise<Result<true>> =>
       ipcRenderer.invoke(Channels.BranchCheckoutRemote, cwd, remoteRef),
     resetToRemote: (cwd: string): Promise<Result<true>> =>
-      ipcRenderer.invoke(Channels.BranchResetToRemote, cwd)
+      ipcRenderer.invoke(Channels.BranchResetToRemote, cwd),
+    resetHard: (cwd: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.BranchResetHard, cwd),
+    delete: (
+      cwd: string,
+      name: string,
+      opts: { force?: boolean } = {}
+    ): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.BranchDelete, cwd, name, opts)
   },
   refs: {
     list: (cwd: string): Promise<Result<RefSet>> =>
@@ -138,7 +166,34 @@ const api = {
     openPath: (fullPath: string): Promise<void> =>
       ipcRenderer.invoke(Channels.ShellOpenPath, fullPath),
     revealInFolder: (fullPath: string): Promise<void> =>
-      ipcRenderer.invoke(Channels.ShellRevealInFolder, fullPath)
+      ipcRenderer.invoke(Channels.ShellRevealInFolder, fullPath),
+    openExternal: (url: string): Promise<void> =>
+      ipcRenderer.invoke(Channels.ShellOpenExternal, url)
+  },
+  pr: {
+    list: (cwd: string): Promise<Result<PrListItem[]>> =>
+      ipcRenderer.invoke(Channels.PrList, cwd),
+    rerunRun: (cwd: string, runId: string, failedOnly: boolean): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.PrRerunRun, cwd, runId, failedOnly),
+    rerunLatest: (cwd: string, failedOnly: boolean): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.PrRerunLatest, cwd, failedOnly)
+  },
+  ci: {
+    available: (): Promise<Result<boolean>> =>
+      ipcRenderer.invoke(Channels.CiAvailable),
+    prStatus: (cwd: string, branch: string): Promise<Result<PullRequestInfo | null>> =>
+      ipcRenderer.invoke(Channels.CiPrStatus, cwd, branch),
+    commitChecks: (cwd: string, sha: string): Promise<Result<CommitChecksInfo | null>> =>
+      ipcRenderer.invoke(Channels.CiCommitChecks, cwd, sha)
+  },
+  settings: {
+    get: (): Promise<Result<SettingsView>> => ipcRenderer.invoke(Channels.SettingsGet),
+    update: (update: SettingsUpdate): Promise<Result<SettingsView>> =>
+      ipcRenderer.invoke(Channels.SettingsUpdate, update)
+  },
+  ai: {
+    generateCommitMessage: (cwd: string): Promise<Result<GeneratedCommitMessage>> =>
+      ipcRenderer.invoke(Channels.AiGenerateCommitMessage, cwd)
   },
   appWindow: {
     resize: (width: number, height: number): Promise<void> =>
@@ -159,6 +214,54 @@ const api = {
       ipcRenderer.on(Channels.MenuCloseRepo, listener)
       return () => ipcRenderer.removeListener(Channels.MenuCloseRepo, listener)
     }
+  },
+  gitUndo: {
+    headSha: (cwd: string): Promise<Result<string>> =>
+      ipcRenderer.invoke(Channels.GitHeadSha, cwd),
+    undo: (cwd: string, sha: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.GitUndo, cwd, sha)
+  },
+  gitignore: {
+    read: (cwd: string): Promise<Result<GitignoreReadResult>> =>
+      ipcRenderer.invoke(Channels.GitignoreRead, cwd),
+    write: (cwd: string, content: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.GitignoreWrite, cwd, content),
+    append: (cwd: string, pattern: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.GitignoreAppend, cwd, pattern)
+  },
+  prExtended: {
+    create: (cwd: string, opts: PrCreateOptions): Promise<Result<{ url: string; number: number }>> =>
+      ipcRenderer.invoke(Channels.PrCreate, cwd, opts),
+    review: (cwd: string, prNumber: number, opts: PrReviewOptions): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.PrReview, cwd, prNumber, opts),
+    diff: (cwd: string, prNumber: number): Promise<Result<string>> =>
+      ipcRenderer.invoke(Channels.PrDiff, cwd, prNumber)
+  },
+  conflict: {
+    versions: (cwd: string, path: string): Promise<Result<ConflictVersions>> =>
+      ipcRenderer.invoke(Channels.ConflictVersions, cwd, path),
+    resolve: (cwd: string, path: string, content: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.ConflictResolve, cwd, path, content),
+    useSide: (cwd: string, path: string, side: 'ours' | 'theirs'): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.ConflictUseSide, cwd, path, side),
+    mergeContinue: (cwd: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.MergeContinue, cwd),
+    mergeAbort: (cwd: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.MergeAbort, cwd)
+  },
+  rebase: {
+    start: (cwd: string, ontoSha: string, plan: RebasePlanEntry[]): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.RebaseStart, cwd, ontoSha, plan),
+    status: (cwd: string): Promise<Result<RebaseStatus>> =>
+      ipcRenderer.invoke(Channels.RebaseStatus, cwd),
+    continue: (cwd: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.RebaseContinue, cwd),
+    abort: (cwd: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.RebaseAbort, cwd)
+  },
+  logSearch: {
+    search: (cwd: string, query: string, limit?: number): Promise<Result<GraphCommit[]>> =>
+      ipcRenderer.invoke(Channels.LogSearch, cwd, query, limit)
   }
 }
 

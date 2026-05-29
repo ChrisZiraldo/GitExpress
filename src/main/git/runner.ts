@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { appendFileSync } from 'node:fs'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
@@ -67,17 +67,25 @@ export async function runGit(args: string[], opts: GitRunOptions): Promise<Resul
     return { ok: true, data: '' }
   }
 
+  const env = {
+    ...process.env,
+    ...opts.env,
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_OPTIONAL_LOCKS: '0',
+    LC_ALL: 'C'
+  }
+
+  // When stdin input is provided, use spawn (execFile/promisified does not
+  // support writing to stdin).  Used by `git apply -` for hunk staging.
+  if (opts.input !== undefined) {
+    return runGitWithStdin(args, opts.input, opts.cwd, env, opts.allowExitCodes)
+  }
+
   try {
     const { stdout } = await execFileAsync('git', args, {
       cwd: opts.cwd,
       maxBuffer: MAX_BUFFER,
-      env: {
-        ...process.env,
-        ...opts.env,
-        GIT_TERMINAL_PROMPT: '0',
-        GIT_OPTIONAL_LOCKS: '0',
-        LC_ALL: 'C'
-      }
+      env
     })
     return { ok: true, data: stdout }
   } catch (err) {
@@ -96,6 +104,46 @@ export async function runGit(args: string[], opts: GitRunOptions): Promise<Resul
       'git command failed'
     return { ok: false, code, stderr }
   }
+}
+
+function runGitWithStdin(
+  args: string[],
+  input: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  allowExitCodes?: number[]
+): Promise<Result<string>> {
+  return new Promise((resolve) => {
+    const child = spawn('git', args, { cwd, env })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString()
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString()
+    })
+    child.on('error', (err) => {
+      resolve({ ok: false, code: 1, stderr: err.message })
+    })
+    child.on('close', (code) => {
+      const exitCode = code ?? 1
+      if (exitCode === 0) {
+        resolve({ ok: true, data: stdout })
+        return
+      }
+      if (allowExitCodes?.includes(exitCode)) {
+        resolve({ ok: true, data: stdout })
+        return
+      }
+      resolve({
+        ok: false,
+        code: exitCode,
+        stderr: stderr.trim() || `git ${args[0] ?? ''} exited with code ${exitCode}`
+      })
+    })
+    child.stdin.end(input)
+  })
 }
 
 export async function runGitVoid(args: string[], opts: GitRunOptions): Promise<Result<true>> {

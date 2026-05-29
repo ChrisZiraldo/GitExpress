@@ -13,23 +13,51 @@ export interface GraphLayout {
   width: number
 }
 
-function firstNullSlot(lanes: (string | null)[]): number {
-  for (let i = 0; i < lanes.length; i++) {
-    if (lanes[i] === null) return i
-  }
-  return lanes.length
+export interface ComputeLanesOptions {
+  /**
+   * Hashes that should always be allocated a fresh lane rather than reusing
+   * a previously-freed slot. Typically the set of local branch tips — this
+   * keeps sibling branches on distinct lanes so they can be rendered above /
+   * below the trunk independently.
+   */
+  pinnedTips?: Set<string>
 }
 
-export function computeLanes(commits: GraphCommit[]): GraphLayout {
+export function computeLanes(
+  commits: GraphCommit[],
+  opts: ComputeLanesOptions = {}
+): GraphLayout {
+  const pinnedTips = opts.pinnedTips ?? new Set<string>()
   const pending: (string | null)[] = []
+  // Lanes claimed by a pinned tip stay reserved forever: they're never
+  // reused by firstNullSlot and they survive the trailing-null trim.
+  const reservedLanes = new Set<number>()
   const homeByHash = new Map<string, number>()
   const rows: GraphRow[] = []
+
+  const firstFreeSlot = (): number => {
+    for (let i = 0; i < pending.length; i++) {
+      if (pending[i] === null && !reservedLanes.has(i)) return i
+    }
+    return pending.length
+  }
 
   for (const commit of commits) {
     let home = pending.findIndex((h) => h === commit.hash)
     if (home === -1) {
-      home = firstNullSlot(pending)
-      if (home === pending.length) pending.push(null)
+      if (pinnedTips.has(commit.hash)) {
+        // Allocate a fresh, dedicated lane for this pinned tip.
+        home = pending.length
+        pending.push(null)
+        reservedLanes.add(home)
+      } else {
+        home = firstFreeSlot()
+        if (home === pending.length) pending.push(null)
+      }
+    } else if (pinnedTips.has(commit.hash)) {
+      // Hash was already in pending (some child carried it forward), but it's
+      // also a pinned tip — reserve this lane for it.
+      reservedLanes.add(home)
     }
 
     const mergeFrom: number[] = []
@@ -42,15 +70,26 @@ export function computeLanes(commits: GraphCommit[]): GraphLayout {
 
     homeByHash.set(commit.hash, home)
 
-    pending[home] = commit.parents[0] ?? null
+    // First parent: carry on this lane unless the parent is itself a pinned
+    // tip — in that case let it claim its own dedicated lane when encountered.
+    const firstParent = commit.parents[0] ?? null
+    pending[home] =
+      firstParent !== null && pinnedTips.has(firstParent) ? null : firstParent
 
     for (let pi = 1; pi < commit.parents.length; pi++) {
-      const slot = firstNullSlot(pending)
-      if (slot === pending.length) pending.push(commit.parents[pi])
-      else pending[slot] = commit.parents[pi]
+      const p = commit.parents[pi]
+      if (pinnedTips.has(p)) continue
+      const slot = firstFreeSlot()
+      if (slot === pending.length) pending.push(p)
+      else pending[slot] = p
     }
 
-    while (pending.length > 0 && pending[pending.length - 1] === null) {
+    // Trim trailing nulls — but keep reserved lanes alive.
+    while (
+      pending.length > 0 &&
+      pending[pending.length - 1] === null &&
+      !reservedLanes.has(pending.length - 1)
+    ) {
       pending.pop()
     }
 
@@ -79,14 +118,14 @@ export function computeLanes(commits: GraphCommit[]): GraphLayout {
 }
 
 export const LANE_PALETTE = [
-  '#5b8cff',
-  '#3ecf8e',
-  '#f5a623',
-  '#ff5d6c',
-  '#a672ff',
-  '#56cfe1',
-  '#ff8fab',
-  '#ffe066'
+  '#3b82f6',
+  '#a855f7',
+  '#22c55e',
+  '#14b8a6',
+  '#f97316',
+  '#eab308',
+  '#ec4899',
+  '#64748b'
 ]
 
 export function laneColor(lane: number): string {

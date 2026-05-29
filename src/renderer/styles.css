@@ -65,20 +65,60 @@ textarea {
   border-radius: 6px;
   background: #161922;
 }
+/* File header pins to the top of the scroll container so the user
+   never loses sight of which file they're reading while scrolling
+   through a long hunk. z-index has to clear the sticky line-number
+   column below. */
 .d2h-file-header {
   background: #1b1f2a !important;
   border-color: #2a2f3d !important;
   color: #e6e8ee !important;
+  position: sticky;
+  top: 0;
+  z-index: 3;
 }
 .d2h-code-line,
 .d2h-code-side-line {
   color: #e6e8ee;
 }
+/* Line-number gutter pins to the LEFT during scroll, so the user
+   never loses the line refs even when scrolling long lines. d2h's
+   own stylesheet sets `position: absolute` on these cells (which
+   takes them out of table flow and pins them to the row); we need
+   `sticky` instead so the cell stays at the viewport's left edge
+   while horizontal scroll moves the code under it. `!important` is
+   required to beat d2h's stylesheet. The sticky column needs an
+   opaque background and a higher z-index than the code cells (which
+   paint diff add/del backgrounds) so the gutter stays readable as
+   those scroll under it. */
 .d2h-code-linenumber,
 .d2h-code-side-linenumber {
   background: #161922 !important;
   border-color: #2a2f3d !important;
   color: #8a93a6 !important;
+  position: sticky !important;
+  left: 0 !important;
+  z-index: 2;
+}
+/* Putting the linenumber cell back into table flow means d2h's
+   `padding: 0 8em` on the code line (which originally reserved 8em
+   on the left for the absolutely-positioned line numbers) becomes
+   a redundant blank gutter. Reset to a small breathing-room padding
+   and let the inline-block size to its content. The 0.5em on the
+   left gives a comfortable separation between the (now in-flow)
+   linenumber column and the first character of code. */
+.d2h-code-line,
+.d2h-code-side-line {
+  padding: 0 0.5em !important;
+  width: auto !important;
+}
+/* Hunk-header rows ("@@ -x,y +x,y @@") use the info background
+   instead of the line-gutter background. Without this override, the
+   sticky linenumber cell of an info row would render with the
+   regular gutter color, leaving a darker square that visually breaks
+   the hunk-header strip. */
+td.d2h-code-linenumber.d2h-info {
+  background: #1b1f2a !important;
 }
 .d2h-ins {
   background: rgba(62, 207, 142, 0.12) !important;
@@ -95,4 +135,16 @@ textarea {
 }
 .d2h-cntx {
   background: transparent !important;
+}
+
+/* Highlight a line the user has selected for line-level stage/discard.
+   The 3px inset-left stripe paints inside the gutter so it's visible
+   even with sticky positioning, and the outline draws around the
+   entire row so selection is obvious when many lines are selected
+   in sequence. */
+tr.simplegit-line-selected > td {
+  background-image: linear-gradient(rgba(96, 165, 250, 0.18), rgba(96, 165, 250, 0.18)) !important;
+}
+tr.simplegit-line-selected > td.d2h-code-linenumber {
+  box-shadow: inset 3px 0 0 rgba(96, 165, 250, 0.95);
 }

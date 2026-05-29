@@ -65,6 +65,26 @@ export async function resetToRemote(cwd: string): Promise<Result<true>> {
   return runGitVoid(['reset', '--hard', '@{u}'], { cwd })
 }
 
+/** Hard-resets to HEAD — discards all uncommitted changes, stays on the current commit. */
+export async function resetHard(cwd: string): Promise<Result<true>> {
+  return runGitVoid(['reset', '--hard', 'HEAD'], { cwd })
+}
+
+/**
+ * Deletes a local branch. Uses `-d` (safe — refuses if not fully merged) by
+ * default; pass `force: true` to use `-D` and discard unmerged work.
+ */
+export async function deleteBranch(
+  cwd: string,
+  name: string,
+  opts: { force?: boolean } = {}
+): Promise<Result<true>> {
+  const trimmed = name.trim()
+  if (!trimmed) return { ok: false, code: 1, stderr: 'Branch name is required' }
+  const flag = opts.force ? '-D' : '-d'
+  return runGitVoid(['branch', flag, trimmed], { cwd })
+}
+
 export async function checkoutRemote(
   cwd: string,
   remoteRef: string

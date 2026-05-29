@@ -19,9 +19,17 @@ export function Toast(): JSX.Element {
         return (
           <div key={t.id} className={base + variant}>
             <span className="flex-1 whitespace-pre-wrap break-words">{t.text}</span>
+            {t.onUndo && (
+              <button
+                onClick={() => { t.onUndo?.(); dismiss(t.id) }}
+                className="shrink-0 text-xs font-semibold underline hover:no-underline ml-1"
+              >
+                Undo
+              </button>
+            )}
             <button
               onClick={() => dismiss(t.id)}
-              className="text-muted hover:text-text ml-1"
+              className="text-muted hover:text-text ml-1 shrink-0"
               aria-label="Dismiss"
             >
               ×
