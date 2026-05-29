@@ -1,5 +1,5 @@
-appId: com.simplegit.app
-productName: SimpleGit
+appId: com.gitmetro.app
+productName: Git Metro
 directories:
   buildResources: build
   output: release/${version}

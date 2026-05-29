@@ -65,3 +65,42 @@ export async function graphLog(cwd: string, limit = 500): Promise<Result<GraphCo
   }
   return { ok: true, data: commits }
 }
+
+export async function searchLog(
+  cwd: string,
+  query: string,
+  limit = 200
+): Promise<Result<GraphCommit[]>> {
+  if (!query) return { ok: true, data: [] }
+  const fmt = ['%H', '%h', '%P', '%an', '%ae', '%aI', '%ar', '%s'].join(SEP) + REC
+  const res = await runGit(
+    [
+      'log',
+      '--all',
+      '--branches',
+      '--remotes',
+      '--date-order',
+      `--max-count=${limit}`,
+      `--pretty=format:${fmt}`,
+      '--no-color',
+      `--grep=${query}`,
+      '-i'
+    ],
+    { cwd }
+  )
+  if (!res.ok) {
+    if (isEmptyRepoError(res.stderr)) return { ok: true, data: [] }
+    return res
+  }
+  const commits: GraphCommit[] = []
+  for (const rec of res.data.split(REC)) {
+    const trimmed = rec.trim()
+    if (!trimmed) continue
+    const parts = trimmed.split(SEP)
+    if (parts.length < 8) continue
+    const [hash, shortHash, parentStr, author, email, date, relativeDate, subject] = parts
+    const parents = parentStr.trim() ? parentStr.trim().split(/\s+/) : []
+    commits.push({ hash, shortHash, parents, author, email, date, relativeDate, subject })
+  }
+  return { ok: true, data: commits }
+}
