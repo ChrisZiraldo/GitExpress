@@ -1,5 +1,6 @@
 appId: com.gitmetro.app
 productName: Git Metro
+icon: assets/icon
 directories:
   buildResources: build
   output: release/${version}

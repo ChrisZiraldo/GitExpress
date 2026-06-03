@@ -6,6 +6,8 @@ import { getRecents, getWindowBounds, saveWindowBounds } from './store'
 
 const isDev = !app.isPackaged
 
+const DOCK_ICON = join(app.getAppPath(), 'assets', 'icon-dock.png')
+
 function createWindow(): BrowserWindow {
   const bounds = getWindowBounds()
   const win = new BrowserWindow({
@@ -17,6 +19,7 @@ function createWindow(): BrowserWindow {
     minWidth: 600,
     minHeight: 480,
     backgroundColor: '#0b0e14',
+    icon: DOCK_ICON,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     show: false,
     webPreferences: {
@@ -60,6 +63,9 @@ function createWindow(): BrowserWindow {
 }
 
 app.whenReady().then(() => {
+  if (process.platform === 'darwin') {
+    app.dock.setIcon(DOCK_ICON)
+  }
   registerIpc()
   buildAppMenu(getRecents())
   createWindow()

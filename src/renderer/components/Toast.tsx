@@ -7,7 +7,7 @@ export function Toast(): JSX.Element {
   if (toasts.length === 0) return <></>
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-md">
+    <div className="fixed bottom-4 z-50 flex flex-col gap-2 max-w-md" style={{ right: '356px' }}>
       {toasts.map((t) => {
         const base = 'px-3 py-2 rounded-md shadow-lg text-sm border flex items-start gap-2 '
         const variant =

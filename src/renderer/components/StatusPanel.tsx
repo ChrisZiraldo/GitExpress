@@ -1,8 +1,55 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRepo } from '../store/useRepo'
 import type { FileChangeType, FileEntry } from '@shared/types'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { ConflictEditor } from './ConflictEditor'
+
+// ── Tree helpers ─────────────────────────────────────────────────────────────
+
+interface DirNode {
+  kind: 'dir'
+  name: string
+  /** Full relative path of this directory, e.g. "src/renderer" */
+  path: string
+  children: TreeNode[]
+}
+interface FileNode {
+  kind: 'file'
+  name: string
+  entry: FileEntry
+}
+type TreeNode = DirNode | FileNode
+
+function buildTree(entries: FileEntry[]): TreeNode[] {
+  const root: DirNode = { kind: 'dir', name: '', path: '', children: [] }
+
+  for (const entry of entries) {
+    const parts = entry.path.split('/')
+    let cur = root
+    for (let i = 0; i < parts.length - 1; i++) {
+      const seg = parts[i]
+      const dirPath = parts.slice(0, i + 1).join('/')
+      let child = cur.children.find((c): c is DirNode => c.kind === 'dir' && c.name === seg)
+      if (!child) {
+        child = { kind: 'dir', name: seg, path: dirPath, children: [] }
+        cur.children.push(child)
+      }
+      cur = child
+    }
+    cur.children.push({ kind: 'file', name: parts[parts.length - 1], entry })
+  }
+
+  const sort = (nodes: TreeNode[]): TreeNode[] => {
+    nodes.sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === 'dir' ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
+    for (const n of nodes) if (n.kind === 'dir') n.children = sort(n.children)
+    return nodes
+  }
+
+  return sort(root.children)
+}
 
 interface Props {
   onRefresh: () => Promise<void>
@@ -37,6 +84,15 @@ export function StatusPanel({ onRefresh }: Props): JSX.Element {
   const selectedFile = useRepo((s) => s.selectedFile)
   const setSelectedFile = useRepo((s) => s.setSelectedFile)
   const pushToast = useRepo((s) => s.pushToast)
+
+  // Persist view mode in localStorage so it survives refreshes
+  const [viewMode, setViewMode] = useState<'path' | 'tree'>(() => {
+    return (localStorage.getItem('statusPanelViewMode') as 'path' | 'tree') ?? 'path'
+  })
+  const setView = (mode: 'path' | 'tree'): void => {
+    localStorage.setItem('statusPanelViewMode', mode)
+    setViewMode(mode)
+  }
 
   // Track which file key (path:staged) is in pending-confirm state for discard
   const [pendingDiscard, setPendingDiscard] = useState<string | null>(null)
@@ -195,6 +251,45 @@ export function StatusPanel({ onRefresh }: Props): JSX.Element {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
+      {/* ── Path / Tree toggle ──────────────────────────────────────── */}
+      <div className="h-7 px-2 flex items-center justify-end gap-0.5 bg-bg-subtle border-b border-line shrink-0">
+        <button
+          onClick={() => setView('path')}
+          title="Flat path list"
+          className={
+            'flex items-center gap-1 px-2 py-0.5 rounded text-xs ' +
+            (viewMode === 'path'
+              ? 'bg-bg-panel text-text border border-line'
+              : 'text-muted hover:text-text')
+          }
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <rect x="0" y="1.5" width="12" height="1.5" rx="0.75" fill="currentColor"/>
+            <rect x="0" y="5.25" width="12" height="1.5" rx="0.75" fill="currentColor"/>
+            <rect x="0" y="9" width="12" height="1.5" rx="0.75" fill="currentColor"/>
+          </svg>
+          Path
+        </button>
+        <button
+          onClick={() => setView('tree')}
+          title="Folder tree"
+          className={
+            'flex items-center gap-1 px-2 py-0.5 rounded text-xs ' +
+            (viewMode === 'tree'
+              ? 'bg-bg-panel text-text border border-line'
+              : 'text-muted hover:text-text')
+          }
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <rect x="0" y="1" width="5" height="4" rx="1" fill="currentColor" opacity="0.8"/>
+            <rect x="3" y="7" width="9" height="3" rx="1" fill="currentColor" opacity="0.5"/>
+            <rect x="1.5" y="5" width="1" height="2" fill="currentColor" opacity="0.6"/>
+            <rect x="1.5" y="5" width="6" height="1" fill="currentColor" opacity="0.6"/>
+          </svg>
+          Tree
+        </button>
+      </div>
+
       {conflicted.length > 0 && (
         <Section
           title={`Conflicts (${conflicted.length})`}
@@ -241,6 +336,17 @@ export function StatusPanel({ onRefresh }: Props): JSX.Element {
       >
         {unstagedAll.length === 0 ? (
           <Empty text="Working tree clean" />
+        ) : viewMode === 'tree' ? (
+          <TreeView
+            nodes={buildTree(unstagedAll)}
+            isSelected={(e) => isSelected(e.path, false)}
+            onClick={(e) => select(e.path, false)}
+            actionLabel="Stage"
+            onAction={(e) => stage([e.path])}
+            isConfirming={(e) => pendingDiscard === discardKey(e.path, false)}
+            onDiscard={(e) => discard(e.path, false, e.changeType)}
+            onContextMenu={(ev, e) => openFileContextMenu(ev, e)}
+          />
         ) : (
           unstagedAll.map((f) => (
             <FileRow
@@ -269,6 +375,17 @@ export function StatusPanel({ onRefresh }: Props): JSX.Element {
       >
         {stagedAll.length === 0 ? (
           <Empty text="No staged changes" />
+        ) : viewMode === 'tree' ? (
+          <TreeView
+            nodes={buildTree(stagedAll)}
+            isSelected={(e) => isSelected(e.path, true)}
+            onClick={(e) => select(e.path, true)}
+            actionLabel="Unstage"
+            onAction={(e) => unstage([e.path])}
+            isConfirming={(e) => pendingDiscard === discardKey(e.path, true)}
+            onDiscard={(e) => discard(e.path, true, e.changeType)}
+            onContextMenu={(ev, e) => openFileContextMenu(ev, e)}
+          />
         ) : (
           stagedAll.map((f) => (
             <FileRow
@@ -412,4 +529,148 @@ function FileRow({
 
 function Empty({ text }: { text: string }): JSX.Element {
   return <div className="px-3 py-2 text-xs text-muted italic">{text}</div>
+}
+
+// ── Tree view ─────────────────────────────────────────────────────────────────
+
+interface TreeViewProps {
+  nodes: TreeNode[]
+  isSelected: (e: FileEntry) => boolean
+  onClick: (e: FileEntry) => void
+  actionLabel: string
+  onAction: (e: FileEntry) => void
+  isConfirming: (e: FileEntry) => boolean
+  onDiscard: (e: FileEntry) => void
+  onContextMenu: (ev: React.MouseEvent, e: FileEntry) => void
+}
+
+function TreeView(props: TreeViewProps): JSX.Element {
+  // All dirs start expanded
+  const initialExpanded = (): Set<string> => {
+    const s = new Set<string>()
+    const collect = (nodes: TreeNode[]): void => {
+      for (const n of nodes) {
+        if (n.kind === 'dir') { s.add(n.path); collect(n.children) }
+      }
+    }
+    collect(props.nodes)
+    return s
+  }
+  const [expanded, setExpanded] = useState<Set<string>>(initialExpanded)
+  const prevNodesRef = useRef(props.nodes)
+
+  // Re-expand new dirs when nodes change (e.g. new files appear)
+  useEffect(() => {
+    if (prevNodesRef.current === props.nodes) return
+    prevNodesRef.current = props.nodes
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      const collect = (nodes: TreeNode[]): void => {
+        for (const n of nodes) {
+          if (n.kind === 'dir') { next.add(n.path); collect(n.children) }
+        }
+      }
+      collect(props.nodes)
+      return next
+    })
+  }, [props.nodes])
+
+  const toggle = (path: string): void => {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
+  const renderNodes = (nodes: TreeNode[], depth: number): JSX.Element[] => {
+    const out: JSX.Element[] = []
+    for (const node of nodes) {
+      if (node.kind === 'dir') {
+        const open = expanded.has(node.path)
+        const fileCount = countFiles(node)
+        out.push(
+          <div
+            key={`dir-${node.path}`}
+            onClick={() => toggle(node.path)}
+            className="flex items-center px-2 py-0.5 cursor-pointer hover:bg-bg-panel select-none"
+            style={{ paddingLeft: `${8 + depth * 14}px` }}
+          >
+            <span className="text-muted mr-1 text-[10px] w-3">{open ? '▾' : '▸'}</span>
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none" className="mr-1.5 shrink-0">
+              <path
+                d="M1 3.5C1 2.67 1.67 2 2.5 2H5l1 1.5h4.5C11.33 3.5 12 4.17 12 5v5c0 .83-.67 1.5-1.5 1.5h-8C1.67 11.5 1 10.83 1 10V3.5z"
+                fill="currentColor"
+                className="text-accent opacity-60"
+              />
+            </svg>
+            <span className="text-xs text-text truncate flex-1">{node.name}</span>
+            <span className="text-[10px] text-muted ml-1 shrink-0">{fileCount}</span>
+          </div>
+        )
+        if (open) {
+          out.push(...renderNodes(node.children, depth + 1))
+        }
+      } else {
+        const { entry } = node
+        const badge = changeBadge(entry)
+        out.push(
+          <div
+            key={`file-${entry.path}`}
+            onClick={() => props.onClick(entry)}
+            onContextMenu={(ev) => props.onContextMenu(ev, entry)}
+            title={entry.path}
+            className={
+              'group flex items-center py-0.5 text-sm cursor-pointer ' +
+              (props.isSelected(entry) ? 'bg-accent/20' : 'hover:bg-bg-panel')
+            }
+            style={{ paddingLeft: `${8 + depth * 14}px`, paddingRight: '8px' }}
+          >
+            <span className="w-3 mr-1 shrink-0" />
+            <span className={`font-mono w-4 text-xs shrink-0 ${badge.cls}`}>{badge.label}</span>
+            <span className="ml-1.5 flex-1 truncate text-xs">{node.name}</span>
+            <button
+              onClick={(e) => { e.stopPropagation(); props.onAction(entry) }}
+              className="ml-1 opacity-0 group-hover:opacity-100 text-xs text-accent hover:text-accent-hover shrink-0"
+            >
+              {props.actionLabel}
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); props.onDiscard(entry) }}
+              className={
+                'ml-1 text-xs shrink-0 ' +
+                (props.isConfirming(entry)
+                  ? 'opacity-100 text-danger font-semibold animate-pulse'
+                  : 'opacity-0 group-hover:opacity-100 text-muted hover:text-danger')
+              }
+              title={
+                props.isConfirming(entry)
+                  ? 'Click again to permanently discard changes'
+                  : entry.changeType === 'untracked'
+                    ? 'Delete file'
+                    : entry.staged
+                      ? 'Discard staged changes (restores to HEAD)'
+                      : 'Discard changes (restores to HEAD)'
+              }
+            >
+              {props.isConfirming(entry) ? 'Confirm?' : '✕'}
+            </button>
+          </div>
+        )
+      }
+    }
+    return out
+  }
+
+  return <>{renderNodes(props.nodes, 0)}</>
+}
+
+function countFiles(node: DirNode): number {
+  let n = 0
+  for (const child of node.children) {
+    if (child.kind === 'file') n++
+    else n += countFiles(child)
+  }
+  return n
 }
