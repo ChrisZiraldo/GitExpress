@@ -76,3 +76,8 @@ export async function rebaseContinue(cwd: string): Promise<Result<true>> {
 export async function rebaseAbort(cwd: string): Promise<Result<true>> {
   return runGitVoid(['rebase', '--abort'], { cwd })
 }
+
+/** Simple non-interactive rebase of the current branch onto another branch. */
+export async function rebaseOnto(cwd: string, branch: string): Promise<Result<true>> {
+  return runGitVoid(['rebase', branch], { cwd })
+}

@@ -23,7 +23,7 @@ import type { GraphCommit, Ref, Stash, StashFileEntry } from '@shared/types'
 import { useRepo } from '../store/useRepo'
 import { useMapCi } from '../hooks/useMapCi'
 import { ContextMenu, type MenuItem } from './ContextMenu'
-import { laneColor } from './metro/colors'
+import { branchColor } from './metro/colors'
 import {
   buildCiByHash,
   computeMetroLayout,
@@ -88,6 +88,7 @@ function HighlightedName({
 
 type SidebarSection =
   | 'repo'
+  | 'currentBranch'
   | 'localBranches'
   | 'remoteBranches'
   | 'filters'
@@ -208,6 +209,7 @@ export function RefsSidebar(): JSX.Element {
 
   const [open, setOpen] = useState<Record<SidebarSection, boolean>>({
     repo: true,
+    currentBranch: true,
     localBranches: true,
     remoteBranches: false,
     filters: false,
@@ -327,7 +329,7 @@ export function RefsSidebar(): JSX.Element {
     // hiddenLocalNames set.
     const lines: BranchLineStatus[] = refs.local.map((r, idx) => {
       const laneIndex = layout.tipLane.get(r.hash) ?? idx
-      const color = laneColor(laneIndex)
+      const color = branchColor(r.name)
       const aheadOfTrunk = trunkRef
         ? r.fullName === trunkRef.fullName
           ? 0
@@ -524,6 +526,7 @@ export function RefsSidebar(): JSX.Element {
   // Open the context menu for a single branch (right-clicked outside any
   // multi-selection, or inside a single-row "selection" of just that one).
   const openSingleBranchMenu = (e: React.MouseEvent, ref: Ref): void => {
+    const currentBranch = refs.local.find((r) => r.current)?.name
     setMenu({
       x: e.clientX,
       y: e.clientY,
@@ -541,6 +544,18 @@ export function RefsSidebar(): JSX.Element {
           onClick: () => runWithBusy(`Pull ${ref.name}`, () =>
             window.git.remote.pull(activeRepo!.path, { branch: ref.name })
           )
+        },
+        { type: 'separator' },
+        {
+          label: currentBranch
+            ? `Rebase ${currentBranch} onto ${ref.name}`
+            : `Rebase onto ${ref.name}`,
+          disabled: !!ref.current,
+          onClick: () =>
+            runWithBusy(
+              `Rebase onto ${ref.name}`,
+              () => window.git.rebase.onto(activeRepo!.path, ref.name)
+            )
         },
         { type: 'separator' },
         { label: 'Highlight on map', onClick: () => setHighlightedBranchId(ref.fullName) },
@@ -821,6 +836,36 @@ export function RefsSidebar(): JSX.Element {
             </div>
           </div>
 
+          {/* Current Branch */}
+          {(() => {
+            const currentLine = branchLines.find((l) => l.ref.current)
+            if (!currentLine) return null
+            const isHighlighted = highlightedBranchId === currentLine.ref.fullName
+            return (
+              <Section
+                title="Current Branch"
+                open={open.currentBranch}
+                onToggle={() => toggle('currentBranch')}
+                icon={<TramFront size={12} className="text-accent" />}
+              >
+                <BranchLineRow
+                  line={currentLine}
+                  query=""
+                  highlighted={isHighlighted}
+                  anyHighlighted={highlightedBranchId !== null}
+                  hiddenByFilter={false}
+                  selected={false}
+                  onClick={() =>
+                    setHighlightedBranchId(isHighlighted ? null : currentLine.ref.fullName)
+                  }
+                  onDoubleClick={() => {}}
+                  onContextMenu={(e) => onBranchLineContext(e, currentLine.ref)}
+                  onCheckout={() => {}}
+                />
+              </Section>
+            )
+          })()}
+
           {/* Local Branches */}
           <Section
             title="Local Branches"
@@ -887,7 +932,7 @@ export function RefsSidebar(): JSX.Element {
                       <RemoteRow
                         key={r.fullName}
                         refData={r}
-                        color={laneColor(idx + branchLines.length)}
+                        color={branchColor(localName)}
                         displayName={localName}
                         query={branchFilter}
                         onClick={() => scrollToRef(r)}

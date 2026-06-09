@@ -4,19 +4,54 @@
  * match a real-world transit-map look on a dark background.
  */
 export const TRANSIT_PALETTE = [
-  '#60a5fa', // blue   — main          (Tailwind blue-400, brighter on dark bg)
-  '#c084fc', // purple — feature/auth   (purple-400)
-  '#4ade80', // green  — feature/dash   (green-400)
-  '#2dd4bf', // teal   — release        (teal-400)
-  '#fb923c', // orange — hotfix         (orange-400)
-  '#facc15', // yellow — chore          (yellow-400)
-  '#f472b6', // pink   — misc           (pink-400)
-  '#94a3b8'  // gray   — stale          (slate-400)
+  '#60a5fa', // blue         (blue-400)
+  '#c084fc', // purple       (purple-400)
+  '#4ade80', // green        (green-400)
+  '#2dd4bf', // teal         (teal-400)
+  '#fb923c', // orange       (orange-400)
+  '#facc15', // yellow       (yellow-400)
+  '#f472b6', // pink         (pink-400)
+  '#94a3b8', // slate        (slate-400)
+  '#f87171', // red          (red-400)
+  '#34d399', // emerald      (emerald-400)
+  '#a78bfa', // violet       (violet-400)
+  '#38bdf8', // sky          (sky-400)
+  '#fb7185', // rose         (rose-400)
+  '#a3e635', // lime         (lime-400)
+  '#e879f9', // fuchsia      (fuchsia-400)
+  '#22d3ee', // cyan         (cyan-400)
+  '#fbbf24', // amber        (amber-400)
+  '#818cf8', // indigo       (indigo-400)
+  '#86efac', // light-green  (green-300)
+  '#fdba74', // peach        (orange-300)
 ] as const
 
 export function laneColor(lane: number): string {
   if (lane < 0) return TRANSIT_PALETTE[0]
   return TRANSIT_PALETTE[lane % TRANSIT_PALETTE.length]
+}
+
+/**
+ * Returns a stable, name-derived color for a branch. The color is determined
+ * by hashing the branch name so it never changes across renders, graph reloads,
+ * or branch additions/deletions.
+ */
+export function branchColor(name: string): string {
+  if (!name) return TRANSIT_PALETTE[0]
+  let h = 0
+  for (let i = 0; i < name.length; i++) {
+    h = (Math.imul(31, h) + name.charCodeAt(i)) | 0
+  }
+  return TRANSIT_PALETTE[Math.abs(h) % TRANSIT_PALETTE.length]
+}
+
+/**
+ * Returns a stable color for a lane: uses the branch name when known
+ * (via `nameMap`), otherwise falls back to the lane-index palette.
+ */
+export function laneOrBranchColor(lane: number, nameMap: Map<number, string>): string {
+  const name = nameMap.get(lane)
+  return name ? branchColor(name) : laneColor(lane)
 }
 
 /** Color used for desaturated / stale references. */

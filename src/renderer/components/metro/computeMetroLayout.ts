@@ -1,6 +1,6 @@
 import type { CheckRollupState, GraphCommit, Ref, RefSet } from '@shared/types'
 import { computeLanes, type GraphRow } from '../graph/computeLanes'
-import { laneColor } from './colors'
+import { laneColor, laneOrBranchColor } from './colors'
 
 /** Optional CI status filter for branch tips. Mirrors `MetroFilters.ciStatus`
  * in the store but kept here so layout can be tested without the renderer. */
@@ -411,6 +411,8 @@ export interface MetroLayout {
   mainLaneX: number
   /** Local branch names that were filtered out by `showMerged`/`showStale`. */
   hiddenLocalNames: Set<string>
+  /** Lane index → local branch name, for stable name-based color lookups. */
+  laneName: Map<number, string>
 }
 
 export interface MetroLayoutOpts {
@@ -629,7 +631,7 @@ export function computeMetroLayout(
       x,
       y,
       kind,
-      color: laneColor(lane),
+      color: laneOrBranchColor(lane, laneBranchName),
       refs: stationRefs,
       isHead,
       hasTag,
@@ -691,7 +693,7 @@ export function computeMetroLayout(
     const name = laneDisplayName.get(lane)
     if (!name) continue
     const cx = lx(lane)
-    laneLabels.push({ lane, name, color: laneColor(lane), x: cx, y: cx })
+    laneLabels.push({ lane, name, color: laneOrBranchColor(lane, laneBranchName), x: cx, y: cx })
   }
   laneLabels.sort((a, b) => a.lane - b.lane)
 
@@ -788,6 +790,7 @@ export function computeMetroLayout(
     cols,
     headLaneY,
     tipLane,
+    laneName: laneBranchName,
     mainLane,
     mainLaneY: lx(mainLane),
     mainLaneX: lx(mainLane),

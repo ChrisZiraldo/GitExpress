@@ -19,6 +19,7 @@ import {
 } from './computeMetroLayout'
 import {
   laneColor,
+  laneOrBranchColor,
   laneCasing,
   laneStaleTint,
   DASH_STALE,
@@ -928,23 +929,6 @@ export function MetroMap(): JSX.Element {
 
       {/* Compass + Legend overlay at top-left */}
 
-      {/* Rebase mode toggle — top-right of map */}
-      <button
-        onClick={() => setRebasePanelOpen((v) => !v)}
-        title="Interactive Rebase Panel"
-        style={{
-          position: 'absolute', top: 10, right: 10, zIndex: 100,
-          display: 'flex', alignItems: 'center', gap: 4,
-          padding: '4px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600,
-          background: rebasePanelOpen ? '#1f6feb22' : '#161b22',
-          border: `1px solid ${rebasePanelOpen ? '#388bfd66' : '#2a2f3b'}`,
-          color: rebasePanelOpen ? '#388bfd' : '#8b949e',
-          cursor: 'pointer'
-        }}
-      >
-        ↕ Rebase
-      </button>
-
       {/* Zoom controls bottom-left */}
       <ZoomControls
         zoom={zoom}
@@ -1077,7 +1061,7 @@ function LaneTracks({ layout, highlight }: LaneTracksProps): JSX.Element {
         x2={x}
         y1={0}
         y2={layout.height}
-        stroke={laneColor(l)}
+        stroke={laneOrBranchColor(l, layout.laneName)}
         strokeWidth={1}
         opacity={dim ? 0.02 : 0.04}
       />
@@ -1171,7 +1155,7 @@ function Lines({ layout, highlight }: LinesProps): JSX.Element {
           key={`casing-${l}-${ri}`}
           d={laneRunPath(pts)}
           fill="none"
-          stroke={laneCasing(laneColor(l))}
+          stroke={laneCasing(laneOrBranchColor(l, layout.laneName))}
           strokeWidth={CASING}
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -1185,7 +1169,7 @@ function Lines({ layout, highlight }: LinesProps): JSX.Element {
   for (const [l, runs] of laneRuns.entries()) {
     const dim = !highlight(l)
     const stale = layout.staleLanes.has(l)
-    const baseColor = stale ? laneStaleTint(laneColor(l)) : laneColor(l)
+    const baseColor = stale ? laneStaleTint(laneOrBranchColor(l, layout.laneName)) : laneOrBranchColor(l, layout.laneName)
     for (let ri = 0; ri < runs.length; ri++) {
       const pts = runs[ri]
       els.push(
@@ -1217,7 +1201,7 @@ function Lines({ layout, highlight }: LinesProps): JSX.Element {
         x2={x}
         y1={y0}
         y2={y1}
-        stroke={laneCasing(laneColor(newest.lane))}
+        stroke={laneCasing(laneOrBranchColor(newest.lane, layout.laneName))}
         strokeWidth={CASING}
         strokeLinecap="round"
         opacity={0.6}
@@ -1230,7 +1214,7 @@ function Lines({ layout, highlight }: LinesProps): JSX.Element {
         x2={x}
         y1={y0}
         y2={y1}
-        stroke={laneColor(newest.lane)}
+        stroke={laneOrBranchColor(newest.lane, layout.laneName)}
         strokeWidth={STROKE}
         strokeLinecap="round"
         opacity={0.55}
@@ -1292,7 +1276,7 @@ function Curves({ layout, highlight }: CurvesProps): JSX.Element {
       const colorLane = pi === 0 ? lane : pl
       const dim = !highlight(pl) && !highlight(lane)
       const stale = layout.staleLanes.has(colorLane)
-      const branchColor = laneColor(colorLane)
+      const branchColor = laneOrBranchColor(colorLane, layout.laneName)
       const baseColor = stale ? laneStaleTint(branchColor) : branchColor
       const key = `curve-p-${commit.hash}-${pi}`
       if (!dim) {

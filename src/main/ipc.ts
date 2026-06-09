@@ -75,6 +75,7 @@ import {
   getRebaseStatus,
   rebaseAbort,
   rebaseContinue,
+  rebaseOnto,
   startRebase
 } from './git/rebase'
 import { join } from 'node:path'
@@ -619,6 +620,12 @@ export function registerIpc(): void {
   ipcMain.handle(Channels.RebaseAbort, async (_e, cwd: string) => {
     if (!cwd) return fail('No repository selected')
     return rebaseAbort(cwd)
+  })
+
+  ipcMain.handle(Channels.RebaseOnto, async (_e, cwd: string, branch: string) => {
+    if (!cwd) return fail('No repository selected')
+    if (!branch) return fail('Branch name required')
+    return rebaseOnto(cwd, branch)
   })
 
   // ── Log search ─────────────────────────────────────────────────────────

@@ -79,6 +79,7 @@ export const Channels = {
   RebaseStatus: 'rebase:status',
   RebaseContinue: 'rebase:continue',
   RebaseAbort: 'rebase:abort',
+  RebaseOnto: 'rebase:onto',
   // Log search
   LogSearch: 'log:search',
   // One-way pushes from main → renderer (no invoke, use ipcRenderer.on)

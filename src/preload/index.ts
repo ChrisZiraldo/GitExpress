@@ -257,7 +257,9 @@ const api = {
     continue: (cwd: string): Promise<Result<true>> =>
       ipcRenderer.invoke(Channels.RebaseContinue, cwd),
     abort: (cwd: string): Promise<Result<true>> =>
-      ipcRenderer.invoke(Channels.RebaseAbort, cwd)
+      ipcRenderer.invoke(Channels.RebaseAbort, cwd),
+    onto: (cwd: string, branch: string): Promise<Result<true>> =>
+      ipcRenderer.invoke(Channels.RebaseOnto, cwd, branch)
   },
   logSearch: {
     search: (cwd: string, query: string, limit?: number): Promise<Result<GraphCommit[]>> =>
